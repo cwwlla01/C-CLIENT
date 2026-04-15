@@ -1,0 +1,470 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  generateProjectName,
+  type ProjectNamingStrategy,
+  type RuntimeMember,
+} from "../data/mock-runtime";
+
+type PublishTaskModalProps = {
+  members: RuntimeMember[];
+  onClose: () => void;
+  onConfirm: (payload: {
+    company: string;
+    department: string;
+    memberId: string;
+    projectName: string;
+    priority: "P0" | "P1" | "P2" | "P3";
+    source: string;
+    taskDescription: string;
+    timeWindow: "immediate" | "today" | "this_week" | "no_deadline";
+    deadlineAt: string;
+  }) => void;
+  defaultProjectStrategy: ProjectNamingStrategy;
+  open: boolean;
+  preferredCompany?: string;
+};
+
+type DropdownFieldProps = {
+  label: string;
+  onSelect: (next: string) => void;
+  open: boolean;
+  onToggle: (open: boolean) => void;
+  options: Array<{ label: string; value: string }>;
+  value: string;
+};
+
+function DropdownField({
+  label,
+  onSelect,
+  open,
+  onToggle,
+  options,
+  value,
+}: DropdownFieldProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        onToggle(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, [onToggle, open]);
+
+  return (
+    <div ref={rootRef} className="form-control gap-2">
+      <label className="label px-0 pb-1 pt-0">
+        <span className="label-text text-[13px] font-bold text-[#334155]">{label}</span>
+      </label>
+
+      <div className={`dropdown w-full ${open ? "dropdown-open" : ""}`}>
+        <button
+          className="btn btn-outline w-full justify-between bg-base-100 font-semibold normal-case text-base-content"
+          onClick={() => onToggle(!open)}
+          type="button"
+        >
+          <span className="truncate">{value}</span>
+          <span className="text-xs text-base-content/60">⌄</span>
+        </button>
+
+        <ul className="menu dropdown-content z-[90] mt-2 w-full rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+          {options.map((option) => (
+            <li key={option.value}>
+              <button
+                className={value === option.label ? "active" : ""}
+                onClick={() => {
+                  onSelect(option.value);
+                  onToggle(false);
+                }}
+                type="button"
+              >
+                {option.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    </div>
+  );
+}
+
+export function PublishTaskModal({
+  defaultProjectStrategy,
+  members,
+  onClose,
+  onConfirm,
+  open,
+  preferredCompany,
+}: PublishTaskModalProps) {
+  const hasInitializedRef = useRef(false);
+  const previousMemberIdRef = useRef("");
+  const [deadlineAt, setDeadlineAt] = useState("");
+  const [priority, setPriority] = useState<"P0" | "P1" | "P2" | "P3">("P1");
+  const [taskDescription, setTaskDescription] = useState("");
+  const [source, setSource] = useState("手动发布");
+  const [timeWindow, setTimeWindow] = useState<"immediate" | "today" | "this_week" | "no_deadline">("today");
+  const [selectedCompany, setSelectedCompany] = useState("");
+  const [selectedDepartment, setSelectedDepartment] = useState("");
+  const [selectedMemberId, setSelectedMemberId] = useState("");
+  const [projectName, setProjectName] = useState("");
+  const [openDropdown, setOpenDropdown] = useState<
+    null | "company" | "department" | "member" | "priority" | "timeWindow" | "source"
+  >(null);
+
+  const companies = useMemo(
+    () =>
+      Array.from(new Set(members.map((member) => member.company).filter(Boolean))).sort(
+        (left, right) => left.localeCompare(right, "zh-CN"),
+      ),
+    [members],
+  );
+
+  const departments = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          members
+            .filter((member) => member.company === selectedCompany)
+            .map((member) => member.department)
+            .filter(Boolean),
+        ),
+      ).sort((left, right) => left.localeCompare(right, "zh-CN")),
+    [members, selectedCompany],
+  );
+
+  const employeeOptions = useMemo(
+    () =>
+      members
+        .filter(
+          (member) =>
+            member.company === selectedCompany &&
+            member.department === selectedDepartment,
+        )
+        .sort((left, right) => left.name.localeCompare(right.name, "zh-CN")),
+        [members, selectedCompany, selectedDepartment],
+  );
+
+  const selectedMember = useMemo(
+    () => employeeOptions.find((member) => member.id === selectedMemberId) ?? null,
+    [employeeOptions, selectedMemberId],
+  );
+
+  const companyOptions = useMemo(
+    () => companies.map((company) => ({ label: company, value: company })),
+    [companies],
+  );
+
+  const departmentOptions = useMemo(
+    () => departments.map((department) => ({ label: department, value: department })),
+    [departments],
+  );
+
+  const employeeDropdownOptions = useMemo(
+    () =>
+      employeeOptions.map((member) => ({
+        label: member.name,
+        value: member.id,
+      })),
+    [employeeOptions],
+  );
+
+  const sourceOptions = useMemo(
+    () => [
+      { label: "手动发布", value: "手动发布" },
+      { label: "CEO", value: "CEO" },
+      { label: "部门负责人", value: "部门负责人" },
+      { label: "系统自动", value: "系统自动" },
+    ],
+    [],
+  );
+
+  useEffect(() => {
+    if (!open) {
+      hasInitializedRef.current = false;
+      return;
+    }
+    if (hasInitializedRef.current) {
+      return;
+    }
+    if (companies.length === 0) {
+      return;
+    }
+
+    const initialCompany =
+      preferredCompany && companies.includes(preferredCompany)
+        ? preferredCompany
+        : companies[0] ?? "";
+    const initialDepartments = Array.from(
+      new Set(
+        members
+          .filter((member) => member.company === initialCompany)
+          .map((member) => member.department)
+          .filter(Boolean),
+      ),
+    ).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    const initialDepartment = initialDepartments[0] ?? "";
+    const initialMembers = members
+      .filter(
+        (member) =>
+          member.company === initialCompany &&
+          member.department === initialDepartment,
+      )
+      .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
+
+    setDeadlineAt("");
+    setPriority("P1");
+    setSource("手动发布");
+    setTimeWindow("today");
+    setTaskDescription("");
+    setSelectedCompany(initialCompany);
+    setSelectedDepartment(initialDepartment);
+    setSelectedMemberId(initialMembers[0]?.id ?? "");
+    setProjectName(initialMembers[0]?.projectName ?? generateProjectName(defaultProjectStrategy));
+    previousMemberIdRef.current = initialMembers[0]?.id ?? "";
+    setOpenDropdown(null);
+    hasInitializedRef.current = true;
+  }, [companies, defaultProjectStrategy, members, open, preferredCompany]);
+
+  useEffect(() => {
+    if (!selectedCompany || departments.includes(selectedDepartment)) {
+      return;
+    }
+    setSelectedDepartment(departments[0] ?? "");
+  }, [departments, selectedCompany, selectedDepartment]);
+
+  useEffect(() => {
+    if (!selectedDepartment || employeeOptions.some((member) => member.id === selectedMemberId)) {
+      return;
+    }
+    setSelectedMemberId(employeeOptions[0]?.id ?? "");
+  }, [employeeOptions, selectedDepartment, selectedMemberId]);
+
+  useEffect(() => {
+    if (!selectedMemberId || previousMemberIdRef.current === selectedMemberId) {
+      return;
+    }
+
+    const matchedMember = employeeOptions.find((member) => member.id === selectedMemberId);
+    if (!matchedMember) {
+      return;
+    }
+
+    previousMemberIdRef.current = selectedMemberId;
+    setProjectName(matchedMember.projectName);
+  }, [employeeOptions, selectedMemberId]);
+
+  if (!open) {
+    return null;
+  }
+
+  return (
+    <dialog open className="modal z-40 bg-[#0F172A5E] backdrop-blur-md">
+      <div className="modal-box flex h-[78vh] max-h-[760px] max-w-[680px] flex-col overflow-hidden p-0">
+        <form
+          className="flex min-h-0 flex-1 flex-col"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onConfirm({
+              company: selectedCompany,
+              department: selectedDepartment,
+              memberId: selectedMemberId,
+              projectName,
+              priority,
+              source,
+              taskDescription,
+              timeWindow,
+              deadlineAt,
+            });
+          }}
+        >
+          <div className="shrink-0 space-y-4 border-b border-base-300 bg-base-100 px-6 pb-5 pt-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-1.5">
+                <p className="text-[26px] font-bold text-[#111827]">发布任务</p>
+                <p className="max-w-[480px] text-[13px] font-medium text-[#64748B]">
+                  将原始需求写入目标员工的 task_request.md；如果目标员工当前未运行，客户端会自动启动它先生成计划再执行。
+                </p>
+              </div>
+              <button className="btn btn-ghost btn-sm" onClick={onClose} type="button">
+                ESC
+                <span className="ml-1 text-[11px] font-bold text-[#94A3B8]">关闭</span>
+              </button>
+            </div>
+          </div>
+
+          <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+            <div className="space-y-5">
+              <div className="grid gap-4 md:grid-cols-3">
+                <DropdownField
+                  label="公司"
+                  onSelect={setSelectedCompany}
+                  onToggle={(isOpen) => setOpenDropdown(isOpen ? "company" : null)}
+                  open={openDropdown === "company"}
+                  options={companyOptions}
+                  value={selectedCompany || "请选择公司"}
+                />
+
+                <DropdownField
+                  label="部门"
+                  onSelect={setSelectedDepartment}
+                  onToggle={(isOpen) => setOpenDropdown(isOpen ? "department" : null)}
+                  open={openDropdown === "department"}
+                  options={departmentOptions}
+                  value={selectedDepartment || "请选择部门"}
+                />
+
+                <DropdownField
+                  label="员工"
+                  onSelect={setSelectedMemberId}
+                  onToggle={(isOpen) => setOpenDropdown(isOpen ? "member" : null)}
+                  open={openDropdown === "member"}
+                  options={employeeDropdownOptions}
+                  value={selectedMember?.name || "请选择员工"}
+                />
+              </div>
+
+              <div className="card bg-base-200 p-4 shadow-none">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-base-content/75">
+                  <span>目标员工：</span>
+                  <span className="badge badge-outline rounded-md">{selectedMember?.name ?? "-"}</span>
+                  <span className="badge badge-outline rounded-md">{projectName || "-"}</span>
+                  <span className="badge badge-outline rounded-md">{selectedMember?.runtimeStatus ?? "unknown"}</span>
+                  <span className="badge badge-outline rounded-md">{selectedMember?.permission ?? "-"}</span>
+                </div>
+                <p className="mt-3 break-all text-xs text-base-content/60">
+                  {selectedMember?.workspace ?? "请先选择员工"}
+                </p>
+              </div>
+
+                <div className="grid gap-4 md:grid-cols-[160px_180px_minmax(0,1fr)]">
+                <DropdownField
+                  label="优先级"
+                  onSelect={(next) => setPriority(next as "P0" | "P1" | "P2" | "P3")}
+                  onToggle={(isOpen) => setOpenDropdown(isOpen ? "priority" : null)}
+                  open={openDropdown === "priority"}
+                  options={[
+                    { label: "P0", value: "P0" },
+                    { label: "P1", value: "P1" },
+                    { label: "P2", value: "P2" },
+                    { label: "P3", value: "P3" },
+                  ]}
+                  value={priority}
+                />
+
+                <DropdownField
+                  label="时间窗口"
+                  onSelect={(next) =>
+                    setTimeWindow(next as "immediate" | "today" | "this_week" | "no_deadline")
+                  }
+                  onToggle={(isOpen) => setOpenDropdown(isOpen ? "timeWindow" : null)}
+                  open={openDropdown === "timeWindow"}
+                  options={[
+                    { label: "立即处理", value: "immediate" },
+                    { label: "今天内", value: "today" },
+                    { label: "这周内", value: "this_week" },
+                    { label: "无明确截止", value: "no_deadline" },
+                  ]}
+                  value={
+                    timeWindow === "immediate"
+                      ? "立即处理"
+                      : timeWindow === "today"
+                        ? "今天内"
+                        : timeWindow === "this_week"
+                          ? "这周内"
+                          : "无明确截止"
+                  }
+                />
+
+                <div className="form-control gap-2">
+                  <label className="label px-0 pb-1 pt-0">
+                    <span className="label-text text-[13px] font-bold text-[#334155]">
+                      具体截止时间
+                    </span>
+                  </label>
+                  <input
+                    className="input input-bordered bg-base-100 text-[14px] font-semibold text-base-content focus:outline-none"
+                    onChange={(event) => setDeadlineAt(event.target.value)}
+                    type="datetime-local"
+                    value={deadlineAt}
+                  />
+                </div>
+
+              <div className="form-control gap-2">
+                <label className="label px-0 pb-1 pt-0">
+                  <span className="label-text text-[13px] font-bold text-[#334155]">
+                    项目名
+                  </span>
+                </label>
+                <div className="join">
+                  <input
+                    className="input input-bordered join-item flex-1"
+                    onChange={(event) => setProjectName(event.target.value)}
+                    placeholder="prj-xxxx"
+                    value={projectName}
+                  />
+                  <button
+                    className="btn btn-outline join-item"
+                    onClick={() => setProjectName(generateProjectName(defaultProjectStrategy))}
+                    type="button"
+                  >
+                    随机生成
+                  </button>
+                </div>
+              </div>
+              </div>
+
+              <DropdownField
+                label="指派来源"
+                onSelect={setSource}
+                onToggle={(isOpen) => setOpenDropdown(isOpen ? "source" : null)}
+                open={openDropdown === "source"}
+                options={sourceOptions}
+                value={source}
+              />
+
+              <div className="form-control gap-2">
+                <label className="label px-0 pb-1 pt-0">
+                  <span className="label-text text-[13px] font-bold text-[#334155]">
+                    需求描述
+                  </span>
+                </label>
+                <textarea
+                  className="textarea textarea-bordered min-h-[220px] bg-base-100 text-[14px] leading-6 text-base-content focus:outline-none"
+                  onChange={(event) => setTaskDescription(event.target.value)}
+                  placeholder="描述你要交付给员工执行的任务、目标、范围、约束和产出要求。"
+                  required
+                  value={taskDescription}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="modal-action mt-0 shrink-0 justify-end gap-3 border-t border-base-300 bg-base-100 px-6 py-4">
+            <button className="btn btn-outline px-4" onClick={onClose} type="button">
+              取消
+            </button>
+            <button
+              className="btn btn-primary px-5"
+              disabled={!selectedCompany || !selectedDepartment || !selectedMemberId || !taskDescription.trim()}
+              type="submit"
+            >
+              发布任务
+            </button>
+          </div>
+        </form>
+      </div>
+      <form className="modal-backdrop" method="dialog">
+        <button onClick={onClose} type="button">
+          关闭
+        </button>
+      </form>
+    </dialog>
+  );
+}

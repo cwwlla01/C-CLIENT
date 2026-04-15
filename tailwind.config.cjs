@@ -1,0 +1,75 @@
+/** @type {import('tailwindcss').Config} */
+module.exports = {
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
+  theme: {
+    extend: {
+      fontFamily: {
+        sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],
+      },
+      boxShadow: {
+        panel: "0 18px 36px rgba(0, 0, 0, 0.24)",
+      },
+      borderRadius: {
+        shell: "18px",
+      },
+      colors: {
+        shell: {
+          app: "oklch(var(--shell-app) / <alpha-value>)",
+          surface: "oklch(var(--shell-surface) / <alpha-value>)",
+          topbar: "oklch(var(--shell-topbar) / <alpha-value>)",
+          panel: "oklch(var(--shell-panel) / <alpha-value>)",
+          frame: "oklch(var(--shell-frame) / <alpha-value>)",
+          border: "oklch(var(--shell-border) / <alpha-value>)",
+          borderSoft: "oklch(var(--shell-border-soft) / <alpha-value>)",
+          text: "oklch(var(--shell-text) / <alpha-value>)",
+          muted: "oklch(var(--shell-muted) / <alpha-value>)",
+          blue: "oklch(var(--shell-blue) / <alpha-value>)",
+          green: "oklch(var(--shell-green) / <alpha-value>)",
+          orange: "oklch(var(--shell-orange) / <alpha-value>)",
+          red: "oklch(var(--shell-red) / <alpha-value>)",
+        },
+      },
+      backgroundImage: {
+        "canvas-grid":
+          "radial-gradient(circle at 1px 1px, rgba(124, 138, 160, 0.12) 1px, transparent 0)",
+      },
+    },
+  },
+  daisyui: {
+    themes: [
+      "light",
+      "dark",
+      "cupcake",
+      "bumblebee",
+      "emerald",
+      "corporate",
+      "synthwave",
+      "retro",
+      "cyberpunk",
+      "valentine",
+      "halloween",
+      "garden",
+      "forest",
+      "aqua",
+      "lofi",
+      "pastel",
+      "fantasy",
+      "wireframe",
+      "black",
+      "luxury",
+      "dracula",
+      "cmyk",
+      "autumn",
+      "business",
+      "acid",
+      "lemonade",
+      "night",
+      "coffee",
+      "winter",
+      "dim",
+      "nord",
+      "sunset",
+    ],
+  },
+  plugins: [require("daisyui")],
+};

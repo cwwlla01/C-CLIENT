@@ -1,0 +1,6 @@
+.terminal-surface--cursor-muted .xterm-cursor,
+.terminal-surface--cursor-muted .xterm .xterm-cursor,
+.terminal-surface--cursor-muted .xterm-cursor-layer .xterm-cursor {
+  opacity: 0 !important;
+  visibility: hidden !important;
+}

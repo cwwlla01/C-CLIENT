@@ -1,0 +1,78 @@
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --shell-app: var(--b2);
+  --shell-surface: var(--b1);
+  --shell-topbar: var(--b1);
+  --shell-panel: var(--b1);
+  --shell-frame: var(--b2);
+  --shell-border: var(--b3);
+  --shell-border-soft: var(--b3);
+  --shell-text: var(--bc);
+  --shell-muted: var(--bc);
+  --shell-blue: var(--p);
+  --shell-green: var(--su);
+  --shell-orange: var(--wa);
+  --shell-red: var(--er);
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  color: oklch(var(--shell-text));
+  background:
+    radial-gradient(circle at top right, oklch(var(--shell-blue) / 0.14), transparent 28%),
+    linear-gradient(
+      180deg,
+      oklch(var(--shell-surface)) 0%,
+      oklch(var(--shell-app)) 100%
+    );
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+.react-flow__attribution {
+  display: none;
+}
+
+.react-flow__panel {
+  margin: 0.75rem;
+}
+
+.react-flow__controls-button,
+.react-flow__minimap {
+  border-radius: 14px;
+}
+
+.react-flow__controls {
+  border: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.react-flow__controls-button {
+  border: 0;
+  box-shadow: none;
+}
+
+.react-flow__minimap {
+  background: oklch(var(--b2));
+  border: 1px solid oklch(var(--b3) / 0.7);
+  overflow: hidden;
+}
