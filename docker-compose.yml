@@ -1,0 +1,18 @@
+services:
+  c-client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: c-client
+    environment:
+      CCLIENT_BRIDGE_HOST: 0.0.0.0
+      CCLIENT_BRIDGE_PORT: 4281
+      UI_PORT: 4273
+    ports:
+      - "4273:4273"
+      - "4281:4281"
+    volumes:
+      - ./runtime-data/company:/workspace/company
+      - ./runtime-data/settings:/workspace/settings
+      - ${USERPROFILE}/.codex:/root/.codex
+    restart: unless-stopped

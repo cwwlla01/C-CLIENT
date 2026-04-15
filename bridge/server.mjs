@@ -11,6 +11,7 @@ import { WebSocketServer } from "ws";
 import pty from "node-pty";
 
 const execFileAsync = promisify(execFile);
+const BRIDGE_HOST = process.env.CCLIENT_BRIDGE_HOST || "127.0.0.1";
 const BRIDGE_PORT = Number(process.env.CCLIENT_BRIDGE_PORT || 4281);
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 30;
@@ -4021,8 +4022,8 @@ wss.on("connection", async (socket, request) => {
   });
 });
 
-server.listen(BRIDGE_PORT, "127.0.0.1", () => {
+server.listen(BRIDGE_PORT, BRIDGE_HOST, () => {
   console.log(
-    `[c-client bridge] listening on http://127.0.0.1:${BRIDGE_PORT} (ws /terminal)`,
+    `[c-client bridge] listening on http://${BRIDGE_HOST}:${BRIDGE_PORT} (ws /terminal)`,
   );
 });

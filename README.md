@@ -16,6 +16,24 @@
 - 组织与任务主数据的最终真相源
 - 最终分配决策和全局调度
 
+## 界面预览
+
+### 总览画布
+
+![运行时总览](./docs/assets/dashboard-overview.png)
+
+### 项目空间视图
+
+![项目空间 tab](./docs/assets/project-spaces-tab.png)
+
+### 工作成果聚合
+
+![工作成果聚合](./docs/assets/work-results-grouped.png)
+
+### 系统设置
+
+![系统设置](./docs/assets/settings-tabs.png)
+
 ## 当前平台支持
 
 - Windows：主支持平台
@@ -48,6 +66,7 @@
 
 - [MVP 当前版本说明](./docs/mvp-current-state.md)
 - [本地 REST / WebSocket API](./docs/local-api-reference.md)
+- [Docker / Podman 运行说明](./docs/docker-podman.md)
 - [客户端运行时架构](./docs/client-runtime-architecture.md)
 - [员工 Codex 运行时设计](./docs/employee-codex-runtime.md)
 - [运行时协议](./docs/runtime-protocol.md)
@@ -87,3 +106,12 @@ npm run bridge
 
 - UI: `http://127.0.0.1:4273`
 - PTY bridge: `http://127.0.0.1:4281`
+
+## 容器运行
+
+已提供：
+
+- `Dockerfile`
+- `.dockerignore`
+- `docker-compose.yml`
+- [Docker / Podman 运行说明](./docs/docker-podman.md)
