@@ -2,13 +2,14 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { existsSync } from "node:fs";
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { createReadStream, existsSync } from "node:fs";
+import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
 import pty from "node-pty";
+import archiver from "archiver";
 
 const execFileAsync = promisify(execFile);
 const BRIDGE_HOST = process.env.CCLIENT_BRIDGE_HOST || "127.0.0.1";
@@ -227,6 +228,289 @@ async function savePromptRules(projectRoot, rules) {
   };
 }
 
+function defaultCodexConfigValues() {
+  return {
+    authMode: "apikey",
+    baseUrl: "https://cpa.56781234.xyz/v1",
+    disableResponseStorage: true,
+    model: "gpt-5.4",
+    modelAutoCompactTokenLimit: 900000,
+    modelContextWindow: 1000000,
+    modelProvider: "custom",
+    modelReasoningEffort: "xhigh",
+    networkAccess: "enabled",
+    providerName: "custom",
+    reviewModel: "gpt-5.4",
+    wireApi: "responses",
+    windowsWslSetupAcknowledged: true,
+  };
+}
+
+function resolveCodexHomeDir() {
+  return process.env.CODEX_HOME || path.join(os.homedir(), ".codex");
+}
+
+function codexConfigPaths() {
+  const codexHome = resolveCodexHomeDir();
+  return {
+    authPath: path.join(codexHome, "auth.json"),
+    codexHome,
+    configPath: path.join(codexHome, "config.toml"),
+  };
+}
+
+function parseTomlPrimitive(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (value === "true") {
+    return true;
+  }
+  if (value === "false") {
+    return false;
+  }
+  if (/^-?\d+$/.test(value)) {
+    return Number(value);
+  }
+  if (/^".*"$/.test(value)) {
+    return value.slice(1, -1).replace(/\\"/g, "\"");
+  }
+  return value;
+}
+
+function parseCodexConfigToml(content) {
+  const defaults = defaultCodexConfigValues();
+  const parsed = { ...defaults };
+  let section = "";
+
+  for (const rawLine of String(content || "").split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith("#")) {
+      continue;
+    }
+
+    const sectionMatch = line.match(/^\[(.+)\]$/);
+    if (sectionMatch) {
+      section = sectionMatch[1].trim();
+      continue;
+    }
+
+    const separatorIndex = line.indexOf("=");
+    if (separatorIndex === -1) {
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    const value = parseTomlPrimitive(line.slice(separatorIndex + 1));
+
+    if (!section) {
+      if (key === "model_provider") {
+        parsed.modelProvider = String(value || defaults.modelProvider);
+      } else if (key === "model") {
+        parsed.model = String(value || defaults.model);
+      } else if (key === "review_model") {
+        parsed.reviewModel = String(value || defaults.reviewModel);
+      } else if (key === "model_reasoning_effort") {
+        parsed.modelReasoningEffort = String(value || defaults.modelReasoningEffort);
+      } else if (key === "disable_response_storage") {
+        parsed.disableResponseStorage = Boolean(value);
+      } else if (key === "network_access") {
+        parsed.networkAccess = String(value || defaults.networkAccess);
+      } else if (key === "windows_wsl_setup_acknowledged") {
+        parsed.windowsWslSetupAcknowledged = Boolean(value);
+      } else if (key === "model_context_window") {
+        parsed.modelContextWindow = Number(value || defaults.modelContextWindow);
+      } else if (key === "model_auto_compact_token_limit") {
+        parsed.modelAutoCompactTokenLimit = Number(
+          value || defaults.modelAutoCompactTokenLimit,
+        );
+      }
+      continue;
+    }
+
+    if (section === "model_providers.custom") {
+      if (key === "name") {
+        parsed.providerName = String(value || defaults.providerName);
+      } else if (key === "wire_api") {
+        parsed.wireApi = String(value || defaults.wireApi);
+      } else if (key === "base_url") {
+        parsed.baseUrl = String(value || defaults.baseUrl);
+      }
+    }
+  }
+
+  return parsed;
+}
+
+function buildCodexConfigToml(config) {
+  const normalized = {
+    ...defaultCodexConfigValues(),
+    ...(config || {}),
+  };
+
+  return [
+    `model_provider = "${normalized.modelProvider}"`,
+    `model = "${normalized.model}"`,
+    `review_model = "${normalized.reviewModel}"`,
+    `model_reasoning_effort = "${normalized.modelReasoningEffort}"`,
+    `disable_response_storage = ${normalized.disableResponseStorage ? "true" : "false"}`,
+    `network_access = "${normalized.networkAccess}"`,
+    `windows_wsl_setup_acknowledged = ${normalized.windowsWslSetupAcknowledged ? "true" : "false"}`,
+    `model_context_window = ${Number(normalized.modelContextWindow) || defaultCodexConfigValues().modelContextWindow}`,
+    `model_auto_compact_token_limit = ${Number(normalized.modelAutoCompactTokenLimit) || defaultCodexConfigValues().modelAutoCompactTokenLimit}`,
+    "",
+    "[model_providers.custom]",
+    `name = "${normalized.providerName}"`,
+    `wire_api = "${normalized.wireApi}"`,
+    `base_url = "${normalized.baseUrl}"`,
+    "",
+  ].join("\n");
+}
+
+function normalizeCodexAuth(payload) {
+  return {
+    OPENAI_API_KEY: String(payload?.OPENAI_API_KEY || payload?.apiKey || "").trim(),
+    authMode: String(payload?.auth_mode || payload?.authMode || "apikey").trim() || "apikey",
+  };
+}
+
+async function loadCodexSettings() {
+  const defaults = defaultCodexConfigValues();
+  const { authPath, codexHome, configPath } = codexConfigPaths();
+  const [configTomlRaw, authJsonRaw, codexCommandAvailable] = await Promise.all([
+    readFile(configPath, "utf8").catch(() => ""),
+    readFile(authPath, "utf8").catch(() => ""),
+    commandExists("codex"),
+  ]);
+
+  const parsedConfig = configTomlRaw ? parseCodexConfigToml(configTomlRaw) : defaults;
+  let parsedAuth = normalizeCodexAuth({});
+
+  if (authJsonRaw) {
+    try {
+      parsedAuth = normalizeCodexAuth(JSON.parse(authJsonRaw));
+    } catch {
+      parsedAuth = normalizeCodexAuth({});
+    }
+  }
+
+  return {
+    auth: parsedAuth,
+    authJson:
+      authJsonRaw ||
+      `${JSON.stringify(
+        {
+          OPENAI_API_KEY: parsedAuth.OPENAI_API_KEY,
+          auth_mode: parsedAuth.authMode,
+        },
+        null,
+        2,
+      )}\n`,
+    authPath: authPath.replace(/\\/g, "/"),
+    codexCommandAvailable,
+    codexHome: codexHome.replace(/\\/g, "/"),
+    configured: Boolean(parsedConfig.baseUrl && parsedAuth.OPENAI_API_KEY),
+    config: parsedConfig,
+    configPath: configPath.replace(/\\/g, "/"),
+    configToml: configTomlRaw || buildCodexConfigToml(parsedConfig),
+  };
+}
+
+async function saveCodexSettings(payload) {
+  const { authPath, codexHome, configPath } = codexConfigPaths();
+  const normalizedConfig = {
+    ...defaultCodexConfigValues(),
+    ...(payload?.config || {}),
+  };
+  const normalizedAuth = normalizeCodexAuth(payload?.auth || {});
+  const nextConfigToml =
+    typeof payload?.configToml === "string" && payload.configToml.trim()
+      ? payload.configToml.replace(/\r\n/g, "\n").trimEnd() + "\n"
+      : buildCodexConfigToml(normalizedConfig);
+  const nextAuthJson = `${JSON.stringify(
+    {
+      OPENAI_API_KEY: normalizedAuth.OPENAI_API_KEY,
+      auth_mode: normalizedAuth.authMode,
+    },
+    null,
+    2,
+  )}\n`;
+
+  await mkdir(codexHome, { recursive: true });
+  await writeFile(configPath, nextConfigToml, "utf8");
+  await writeFile(authPath, nextAuthJson, "utf8");
+
+  return loadCodexSettings();
+}
+
+function buildCodexAuthHeaders(apiKey) {
+  return {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+}
+
+async function testCodexSettings(payload) {
+  const config =
+    typeof payload?.configToml === "string" && payload.configToml.trim()
+      ? {
+          ...defaultCodexConfigValues(),
+          ...parseCodexConfigToml(payload.configToml),
+        }
+      : {
+          ...defaultCodexConfigValues(),
+          ...(payload?.config || {}),
+        };
+  const auth = normalizeCodexAuth(payload?.auth || {});
+  const baseUrl = String(config.baseUrl || "").replace(/\/+$/, "");
+
+  if (!baseUrl) {
+    throw new Error("base_url 不能为空");
+  }
+  if (!auth.OPENAI_API_KEY) {
+    throw new Error("API Key 不能为空");
+  }
+
+  const startedAt = Date.now();
+  const modelsUrl = `${baseUrl}/models`;
+  const response = await fetch(modelsUrl, {
+    headers: buildCodexAuthHeaders(auth.OPENAI_API_KEY),
+    method: "GET",
+  });
+  const latencyMs = Date.now() - startedAt;
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `连通性测试失败：${response.status} ${response.statusText}${text ? ` · ${text.slice(0, 240)}` : ""}`,
+    );
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    parsed = null;
+  }
+
+  const models = Array.isArray(parsed?.data)
+    ? parsed.data
+        .map((item) => String(item?.id || "").trim())
+        .filter(Boolean)
+        .slice(0, 8)
+    : [];
+
+  return {
+    latencyMs,
+    message: models.length > 0 ? `连接成功，已识别 ${models.length} 个模型` : "连接成功",
+    modelCount: Array.isArray(parsed?.data) ? parsed.data.length : 0,
+    models,
+    ok: true,
+    testedUrl: modelsUrl,
+  };
+}
+
 function writeJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
     "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key",
@@ -235,6 +519,81 @@ function writeJson(response, statusCode, payload) {
     "Content-Type": "application/json",
   });
   response.end(JSON.stringify(payload));
+}
+
+function createCorsHeaders(extraHeaders = {}) {
+  return {
+    "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Allow-Origin": "*",
+    ...extraHeaders,
+  };
+}
+
+function sanitizeDownloadName(value, fallback = "download") {
+  const normalized = String(value || "").trim();
+  const sanitized = normalized.replace(/[<>:"/\\|?*\u0000-\u001F]/g, "-").trim();
+  return sanitized || fallback;
+}
+
+function buildContentDisposition(filename) {
+  const utf8Name = sanitizeDownloadName(filename);
+  const asciiFallback = utf8Name.replace(/[^\x20-\x7E]+/g, "_");
+  return `attachment; filename="${asciiFallback || "download"}"; filename*=UTF-8''${encodeURIComponent(utf8Name)}`;
+}
+
+function guessContentType(filePath) {
+  const extension = path.extname(String(filePath || "")).toLowerCase();
+  switch (extension) {
+    case ".md":
+      return "text/markdown; charset=utf-8";
+    case ".txt":
+      return "text/plain; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".png":
+      return "image/png";
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".webp":
+      return "image/webp";
+    case ".pdf":
+      return "application/pdf";
+    case ".zip":
+      return "application/zip";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+function deriveEmployeeNameFromWorkspace(workspacePath) {
+  return path.basename(deriveEmployeeRootFromWorkspace(workspacePath)) || "employee";
+}
+
+async function streamFileDownload(response, filePath, downloadName) {
+  const fileStat = await stat(filePath).catch(() => null);
+  if (!fileStat?.isFile()) {
+    throw new Error("目标文件不存在");
+  }
+
+  response.writeHead(
+    200,
+    createCorsHeaders({
+      "Cache-Control": "no-store",
+      "Content-Disposition": buildContentDisposition(downloadName || path.basename(filePath)),
+      "Content-Length": fileStat.size,
+      "Content-Type": guessContentType(filePath),
+    }),
+  );
+
+  return new Promise((resolve, reject) => {
+    const stream = createReadStream(filePath);
+    stream.on("error", reject);
+    response.on("close", resolve);
+    response.on("finish", resolve);
+    stream.pipe(response);
+  });
 }
 
 function sanitizePathSegment(segment) {
@@ -333,21 +692,28 @@ function buildWorkspaceGuideMarkdown(payload, createdAt) {
 客户端后续在启动 CLI 时，应默认完成以下动作：
 
 1. 进入当前项目空间
-2. 装载 \`agent.md\`
-3. 阅读本说明书 \`workspace_guide.md\`
-4. 优先读取 \`current.md\`，其次读取 \`plan.md\`
-5. 在当前任务基础上继续工作，而不是把自己当作一个空白终端
+2. 优先让 Codex 装载 \`AGENTS.md\`
+3. 阅读 \`ROLE.md\`
+4. 如需更详细的人类说明，再阅读本说明书 \`workspace_guide.md\`
+5. 优先读取 \`current.md\`，其次读取 \`plan.md\`
+6. 在当前任务基础上继续工作，而不是把自己当作一个空白终端
 
 ## 文件说明
 
-- \`agent.md\`
-  员工角色定义快照，说明你是谁、能做什么、边界是什么
+- \`AGENTS.md\`
+  当前项目空间内给 Codex 自动加载的长期规则文件，说明你应该如何维护这些任务文件与产出物
+
+- \`ROLE.md\`
+  员工角色定义快照，说明你是谁、擅长什么、边界是什么
 
 - \`workspace_guide.md\`
-  当前项目空间的工作规则说明，告诉你这些文件分别代表什么，以及你应该如何更新它们
+  当前项目空间的补充说明文档，主要供人类或调试场景阅读
 
 - \`task_request.md\`
   原始任务收件箱。外部发布给员工的需求应先写入这里，由员工自己解析并生成计划
+
+- \`references/\`
+  外部派发任务时附带的参考资料目录，可包含图片、文档、代码片段等输入材料
 
 - \`startup_ack.md\`
   首轮确认文件。员工启动后应先写这里，确认自己已读取任务、是否已生成计划、下一步准备做什么
@@ -417,6 +783,69 @@ function buildWorkspaceGuideMarkdown(payload, createdAt) {
 `;
 }
 
+function buildWorkspaceAgentsTemplateMarkdown() {
+  return `# AGENTS.md
+
+你正在一个 C-CLIENT 员工项目空间内工作。
+
+本文件对当前目录及其子目录全部生效。
+
+## 启动规则
+
+1. 先阅读 \`ROLE.md\`
+2. 再阅读 \`task_request.md\`
+3. 如存在待确认任务，先更新 \`startup_ack.md\`
+4. 先生成或更新 \`plan.md\`，再执行具体工作
+5. 不要把自己当成一个空白 shell，要基于当前文件继续推进
+
+## 文件职责
+
+- \`ROLE.md\`
+  员工角色快照，描述这个员工是谁、擅长什么、工作边界是什么
+
+- \`task_request.md\`
+  原始需求输入。外部派发的新任务先写这里，再由你自行解析
+
+- \`references/\`
+  任务附带的参考资料目录。若 \`task_request.md\` 提到了这里的文件，应在规划前先阅读或查看
+
+- \`startup_ack.md\`
+  首轮确认文件。接单后应先更新这里，写清任务理解、计划状态和下一步动作
+
+- \`plan.md\`
+  任务拆解计划。先规划，再执行
+
+- \`current.md\`
+  当前正在处理的任务与下一步，必须保持最新且简洁
+
+- \`wait_finished.md\`
+  尚未开始的排队任务
+
+- \`finished.md\`
+  已完成事项的追加记录，不要覆盖历史
+
+- \`block.md\`
+  阻塞记录。遇到阻塞必须登记原因、影响和需要的支持
+
+- \`artifacts/\`
+  所有真实产出物都必须写到这里
+
+## 工作约束
+
+- 真实产出物必须进入 \`artifacts/\`
+- 任务切换时及时更新 \`current.md\`
+- 完成事项只追加到 \`finished.md\`
+- 遇到阻塞必须写入 \`block.md\`
+- 不要把业务产出写进 \`runtime/meta.json\`
+
+## 交付习惯
+
+- 优先给出简洁的任务摘要
+- 先写计划，再动手执行
+- 如果任务要求不清晰，先在 \`startup_ack.md\` 或 \`block.md\` 中说明
+`;
+}
+
 function buildCodexBootstrapMarkdown(payload, createdAt) {
   return `你现在是一个已经应用了员工 Agent 定义的 Codex CLI 会话。
 
@@ -430,13 +859,12 @@ function buildCodexBootstrapMarkdown(payload, createdAt) {
 
 启动后必须遵循以下顺序：
 
-1. 先阅读 agent.md
-2. 再阅读 workspace_guide.md
-3. 阅读 task_request.md
-4. 先更新 startup_ack.md，确认你已经完成任务理解
-5. 再基于 task_request.md 生成或更新 plan.md
-6. 再严格按照 workspace_guide.md 的要求维护 current.md、plan.md、wait_finished.md、finished.md、block.md
-7. 所有真实产出物写入 artifacts/
+1. 先确认 \`AGENTS.md\` 已被加载，并阅读 \`ROLE.md\`
+2. 再阅读 \`task_request.md\`
+3. 先更新 \`startup_ack.md\`，确认你已经完成任务理解
+4. 再基于 \`task_request.md\` 生成或更新 \`plan.md\`
+5. 严格按照 \`AGENTS.md\` 的要求维护 \`current.md\`、\`plan.md\`、\`wait_finished.md\`、\`finished.md\`、\`block.md\`
+6. 所有真实产出物写入 \`artifacts/\`
 
 你不是普通 shell，而是项目空间中的员工执行单元。
 
@@ -1058,6 +1486,149 @@ async function getEmployeeDeliveries(workspacePath) {
   };
 }
 
+async function deleteEmployeeWorkspace(payload) {
+  const workspacePath = String(payload?.workspacePath || "").replace(/[\\/]+$/, "");
+  if (!workspacePath) {
+    throw new Error("workspacePath is required");
+  }
+
+  const context = await resolveEmployeeContext(workspacePath);
+  const employeeRoot = String(context.employeeRoot || "").replace(/[\\/]+$/, "");
+  if (!employeeRoot) {
+    throw new Error("employeeRoot is required");
+  }
+
+  if (context.memberId) {
+    terminateSession(context.memberId);
+  }
+
+  await rm(employeeRoot, { force: true, recursive: true });
+
+  return {
+    deleted: true,
+    employeeName:
+      context.employeeProfile.employeeName ??
+      context.currentMeta.employeeName ??
+      path.basename(employeeRoot),
+    employeeRoot,
+    memberId: context.memberId,
+    workspacePath,
+  };
+}
+
+async function collectProjectResultArchiveItems(projectWorkspace) {
+  const normalizedWorkspace = String(projectWorkspace || "").replace(/[\\/]+$/, "");
+  if (!normalizedWorkspace) {
+    return [];
+  }
+
+  const projectName = sanitizeDownloadName(
+    deriveProjectNameFromWorkspace(normalizedWorkspace),
+    "project",
+  );
+  const [artifactEntries, finishedContent] = await Promise.all([
+    listArtifactEntries(normalizedWorkspace),
+    readWorkspaceFileContent(normalizedWorkspace, "finished.md"),
+  ]);
+  const finishedEntries = listFinishedEntries(normalizedWorkspace, finishedContent);
+  const archiveItems = [];
+
+  if (finishedEntries.length > 0) {
+    const finishedPath = path.join(normalizedWorkspace, "finished.md");
+    if (existsSync(finishedPath)) {
+      archiveItems.push({
+        archivePath: `${projectName}/finished.md`,
+        filePath: finishedPath,
+      });
+    }
+  }
+
+  for (const artifact of artifactEntries) {
+    if (!artifact.filePath) {
+      continue;
+    }
+
+    archiveItems.push({
+      archivePath: `${projectName}/artifacts/${artifact.detail}`,
+      filePath: artifact.filePath,
+    });
+  }
+
+  return archiveItems;
+}
+
+async function streamResultsArchiveDownload(response, workspacePath, scope = "project") {
+  const normalizedWorkspace = String(workspacePath || "").replace(/[\\/]+$/, "");
+  if (!normalizedWorkspace) {
+    throw new Error("workspacePath is required");
+  }
+
+  const normalizedScope = scope === "employee" ? "employee" : "project";
+  let archiveItems = [];
+  let archiveName = "";
+
+  if (normalizedScope === "employee") {
+    const workspaces = await listEmployeeProjectWorkspaces(normalizedWorkspace);
+    const dedupedWorkspaces = Array.from(
+      new Set((workspaces.length > 0 ? workspaces : [normalizedWorkspace]).map((item) => item.replace(/[\\/]+$/, ""))),
+    );
+
+    for (const projectWorkspace of dedupedWorkspaces) {
+      archiveItems.push(...(await collectProjectResultArchiveItems(projectWorkspace)));
+    }
+
+    archiveName = `${sanitizeDownloadName(
+      deriveEmployeeNameFromWorkspace(normalizedWorkspace),
+      "employee",
+    )}-results.zip`;
+  } else {
+    archiveItems = await collectProjectResultArchiveItems(normalizedWorkspace);
+    archiveName = `${sanitizeDownloadName(
+      deriveProjectNameFromWorkspace(normalizedWorkspace),
+      "project",
+    )}-results.zip`;
+  }
+
+  const uniqueItems = Array.from(
+    new Map(
+      archiveItems.map((item) => [
+        `${item.archivePath.toLowerCase()}::${String(item.filePath).replace(/\\/g, "/").toLowerCase()}`,
+        item,
+      ]),
+    ).values(),
+  );
+
+  if (uniqueItems.length === 0) {
+    throw new Error("当前没有可下载的成果");
+  }
+
+  response.writeHead(
+    200,
+    createCorsHeaders({
+      "Cache-Control": "no-store",
+      "Content-Disposition": buildContentDisposition(archiveName),
+      "Content-Type": "application/zip",
+    }),
+  );
+
+  return new Promise((resolve, reject) => {
+    const archive = archiver("zip", { zlib: { level: 9 } });
+
+    archive.on("error", reject);
+    response.on("close", resolve);
+    response.on("finish", resolve);
+    archive.pipe(response);
+
+    for (const item of uniqueItems) {
+      archive.file(item.filePath, {
+        name: item.archivePath.replace(/\\/g, "/"),
+      });
+    }
+
+    archive.finalize().catch(reject);
+  });
+}
+
 async function switchEmployeeProject(payload) {
   const context = await resolveEmployeeContext(payload.workspacePath);
   const targetWorkspacePath = String(payload.targetWorkspacePath || "").replace(/[\\/]+$/, "");
@@ -1267,6 +1838,80 @@ function buildNoTaskCurrentMarkdown() {
   return "# 当前任务\n\n- 当前暂无任务\n";
 }
 
+function sanitizeReferenceFileName(fileName, fallbackPrefix = "reference") {
+  const parsed = path.parse(String(fileName || ""));
+  const safeName = sanitizePathSegment(parsed.name || fallbackPrefix);
+  const safeExt = String(parsed.ext || "").replace(/[^.\w-]/g, "");
+  return `${safeName}${safeExt || ""}`;
+}
+
+function formatAttachmentSizeLabel(size) {
+  const normalized = Number(size || 0);
+  if (normalized >= 1024 * 1024) {
+    return `${(normalized / (1024 * 1024)).toFixed(1)} MB`;
+  }
+  if (normalized >= 1024) {
+    return `${Math.max(1, Math.round(normalized / 1024))} KB`;
+  }
+  return `${normalized} B`;
+}
+
+async function persistTaskReferenceAttachments(workspacePath, attachments, assignedAt) {
+  if (!Array.isArray(attachments) || attachments.length === 0) {
+    return [];
+  }
+
+  const referencesDir = path.join(workspacePath, "references");
+  await mkdir(referencesDir, { recursive: true });
+  const timestampPrefix = assignedAt.replace(/[:.]/g, "-");
+  const savedReferences = [];
+
+  for (const [index, attachment] of attachments.entries()) {
+    const contentBase64 = String(attachment?.contentBase64 || "").trim();
+    if (!contentBase64) {
+      continue;
+    }
+
+    const sanitizedName = sanitizeReferenceFileName(
+      attachment?.name,
+      `reference-${index + 1}`,
+    );
+    const storedName = `${timestampPrefix}-${String(index + 1).padStart(2, "0")}-${sanitizedName}`;
+    const absolutePath = path.join(referencesDir, storedName);
+    const fileBuffer = Buffer.from(contentBase64, "base64");
+    await writeFile(absolutePath, fileBuffer);
+
+    savedReferences.push({
+      absolutePath: absolutePath.replace(/\\/g, "/"),
+      isImage: Boolean(attachment?.isImage) || String(attachment?.mimeType || "").startsWith("image/"),
+      mimeType: String(attachment?.mimeType || "application/octet-stream"),
+      name: String(attachment?.name || storedName),
+      relativePath: `references/${storedName}`.replace(/\\/g, "/"),
+      size: Number(attachment?.size || fileBuffer.length || 0),
+      storedName,
+    });
+  }
+
+  return savedReferences;
+}
+
+function buildReferenceListMarkdown(savedReferences) {
+  if (!Array.isArray(savedReferences) || savedReferences.length === 0) {
+    return "";
+  }
+
+  return [
+    "### 参考资料",
+    "",
+    ...savedReferences.map((reference) => {
+      const imageLabel = reference.isImage ? " · 图片参考" : "";
+      return `- \`${reference.relativePath}\` · ${reference.mimeType} · ${formatAttachmentSizeLabel(reference.size)}${imageLabel}`;
+    }),
+    "",
+    "在生成计划之前，请先阅读或查看这些参考资料。",
+  ].join("\n");
+}
+
 function buildNoPendingStartupAckMarkdown() {
   return "# 首轮确认\n\n- 状态：无待确认任务\n";
 }
@@ -1379,6 +2024,12 @@ async function assignTaskWithinWorkspace(payload) {
   const priority = String(payload.priority || "P1").trim() || "P1";
   const source = String(payload.source || "manual").trim() || "manual";
   const timeWindow = String(payload.timeWindow || "today").trim() || "today";
+  const savedReferences = await persistTaskReferenceAttachments(
+    workspacePath,
+    payload.attachments,
+    assignedAt,
+  );
+  const referenceSection = buildReferenceListMarkdown(savedReferences);
   const taskSummary =
     taskDescription
       .split(/\r?\n/)
@@ -1400,12 +2051,12 @@ async function assignTaskWithinWorkspace(payload) {
   await appendMarkdownSection(
     taskRequestPath,
     `${assignedAt} 原始任务`,
-    `- 任务摘要：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 来源：任务发布\n\n### 原始需求\n\n${taskDescription}`,
+    `- 任务摘要：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 来源：任务发布${savedReferences.length > 0 ? `\n- 参考资料数：${savedReferences.length}` : ""}\n\n### 原始需求\n\n${taskDescription}${referenceSection ? `\n\n${referenceSection}` : ""}`,
   );
 
   await writeFile(
     startupAckPath,
-    `# 首轮确认\n\n- 状态：待确认\n- 最近任务摘要：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 指派时间：${assignedAt}\n\n## 要求\n\n1. 先阅读 task_request.md\n2. 生成或更新 plan.md\n3. 在本文件回写你的理解摘要、计划状态与下一步动作\n`,
+    `# 首轮确认\n\n- 状态：待确认\n- 最近任务摘要：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 指派时间：${assignedAt}${savedReferences.length > 0 ? `\n- 参考资料数：${savedReferences.length}` : ""}\n\n## 要求\n\n1. 先阅读 task_request.md${savedReferences.length > 0 ? " 和 references/ 下的参考资料" : ""}\n2. 生成或更新 plan.md\n3. 在本文件回写你的理解摘要、计划状态与下一步动作\n`,
     "utf8",
   );
 
@@ -1417,14 +2068,14 @@ async function assignTaskWithinWorkspace(payload) {
   if (assignMode === "current") {
     await writeFile(
       currentPath,
-      `# 当前任务\n\n- 待解析新任务：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 指派时间：${assignedAt}\n- 下一步：先阅读 task_request.md 并生成 plan.md\n- 来源：任务发布\n`,
+      `# 当前任务\n\n- 待解析新任务：${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 指派时间：${assignedAt}\n- 下一步：先阅读 task_request.md${savedReferences.length > 0 ? " 和 references/ 参考资料" : ""}并生成 plan.md\n- 来源：任务发布\n`,
       "utf8",
     );
   } else {
     await appendMarkdownSection(
       waitFinishedPath,
       `${assignedAt} 待解析任务`,
-      `- ${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 来源：任务发布\n- 后续动作：处理完当前任务后读取 task_request.md 并生成计划`,
+      `- ${taskSummary}\n- 优先级：${priority}\n- 时间窗口：${timeWindow}\n- 截止时间：${deadlineAt || "未设置"}\n- 指派来源：${source}\n- 来源：任务发布${savedReferences.length > 0 ? `\n- 参考资料数：${savedReferences.length}` : ""}\n- 后续动作：处理完当前任务后读取 task_request.md${savedReferences.length > 0 ? " 和 references/ 参考资料" : ""}并生成计划`,
     );
   }
 
@@ -1432,6 +2083,14 @@ async function assignTaskWithinWorkspace(payload) {
     lastAction: "assign_task",
     lastAssignedAt: assignedAt,
     lastAssignedDeadline: deadlineAt || null,
+    lastAssignedReferences: savedReferences.map((reference) => ({
+      absolutePath: reference.absolutePath,
+      isImage: reference.isImage,
+      mimeType: reference.mimeType,
+      name: reference.name,
+      relativePath: reference.relativePath,
+      size: reference.size,
+    })),
     lastAssignedPriority: priority,
     lastAssignedSource: source,
     lastAssignedTimeWindow: timeWindow,
@@ -1446,6 +2105,13 @@ async function assignTaskWithinWorkspace(payload) {
     assignedAt,
     currentTask: taskSummary,
     deadlineAt,
+    attachments: savedReferences.map((reference) => ({
+      isImage: reference.isImage,
+      mimeType: reference.mimeType,
+      name: reference.name,
+      relativePath: reference.relativePath,
+      size: reference.size,
+    })),
     mode: assignMode,
     priority,
     source,
@@ -1728,6 +2394,75 @@ async function readOptionalTextFile(filePath) {
   }
 }
 
+function normalizeMarkdownContent(content, fallback) {
+  const normalized = String(content || "").trim();
+  return `${(normalized || fallback).trim()}\n`;
+}
+
+function workspaceInstructionPaths(workspacePath) {
+  return {
+    agentsPath: path.join(workspacePath, "AGENTS.md"),
+    legacyAgentPath: path.join(workspacePath, "agent.md"),
+    rolePath: path.join(workspacePath, "ROLE.md"),
+  };
+}
+
+function projectTemplateFiles(projectRoot) {
+  const templatesDir = path.join(projectRoot, "setting", "templates");
+  return {
+    agentsTemplatePath: path.join(templatesDir, "AGENTS.md"),
+    templatesDir,
+  };
+}
+
+async function ensureWorkspaceAgentsFile(projectRoot, workspacePath) {
+  const normalizedProjectRoot = String(projectRoot || "").replace(/[\\/]+$/, "");
+  if (!normalizedProjectRoot) {
+    throw new Error("projectRoot is required");
+  }
+
+  const { agentsTemplatePath, templatesDir } = projectTemplateFiles(normalizedProjectRoot);
+  await mkdir(templatesDir, { recursive: true });
+  await ensureTextFile(
+    agentsTemplatePath,
+    normalizeMarkdownContent(buildWorkspaceAgentsTemplateMarkdown(), "# AGENTS.md\n"),
+  );
+
+  const templateContent = await readOptionalTextFile(agentsTemplatePath);
+  const { agentsPath } = workspaceInstructionPaths(workspacePath);
+  await ensureTextFile(
+    agentsPath,
+    normalizeMarkdownContent(templateContent, buildWorkspaceAgentsTemplateMarkdown()),
+  );
+
+  return agentsPath;
+}
+
+async function resolveRoleDefinitionText(workspacePath, employeeRoot = deriveEmployeeRootFromWorkspace(workspacePath)) {
+  const workspaceFiles = workspaceInstructionPaths(workspacePath);
+  const employeeFiles = employeeRootFiles(employeeRoot);
+
+  return (
+    (await readOptionalTextFile(workspaceFiles.rolePath)) ||
+    (await readOptionalTextFile(workspaceFiles.legacyAgentPath)) ||
+    (await readOptionalTextFile(employeeFiles.rolePath)) ||
+    (await readOptionalTextFile(employeeFiles.legacyAgentPath))
+  );
+}
+
+async function ensureWorkspaceRoleFile(workspacePath, roleContent = "") {
+  const { rolePath, legacyAgentPath } = workspaceInstructionPaths(workspacePath);
+  const resolvedRoleContent =
+    String(roleContent || "").trim() || (await readOptionalTextFile(legacyAgentPath));
+
+  await ensureTextFile(
+    rolePath,
+    normalizeMarkdownContent(resolvedRoleContent, "# ROLE.md\n\n待补充\n"),
+  );
+
+  return rolePath;
+}
+
 function extractMeaningfulTextLines(content) {
   const normalized = String(content)
     .replace(/`r`n/g, "\n")
@@ -1830,6 +2565,16 @@ async function discoverWorkspaces(projectRoot) {
   const normalizedRoot = String(projectRoot || "").replace(/[\\/]+$/, "");
   if (!normalizedRoot) {
     throw new Error("projectRoot is required");
+  }
+
+  const normalizedProjectRoot = normalizedRoot.replace(/\\/g, "/");
+  if (!existsSync(normalizedRoot)) {
+    return {
+      companies: [],
+      projectRoot: normalizedProjectRoot,
+      projectRootExists: false,
+      runtimes: [],
+    };
   }
 
   const companies = await listCompanyDirectories(normalizedRoot);
@@ -1940,12 +2685,22 @@ async function discoverWorkspaces(projectRoot) {
 
   return {
     companies,
+    projectRoot: normalizedProjectRoot,
+    projectRootExists: true,
     runtimes,
   };
 }
 
 async function runGit(args, cwd) {
   const { stdout } = await execFileAsync("git", args, {
+    cwd,
+    windowsHide: true,
+  });
+  return stdout.trim();
+}
+
+async function runCommand(command, args, cwd = process.cwd()) {
+  const { stdout } = await execFileAsync(command, args, {
     cwd,
     windowsHide: true,
   });
@@ -1965,43 +2720,213 @@ async function commandExists(command) {
   }
 }
 
-function sanitizeRepoUrl(repoUrl) {
-  const trimmed = repoUrl.trim().replace(/\/+$/, "");
-  if (/^https:\/\/github\.com\//i.test(trimmed) && !trimmed.endsWith(".git")) {
-    return `${trimmed}.git`;
+function normalizeRepoUrl(repoUrl) {
+  return String(repoUrl || "").trim().replace(/\/+$/, "");
+}
+
+function buildGitCloneUrl(repoUrl) {
+  const normalized = normalizeRepoUrl(repoUrl);
+  if (/^https:\/\/github\.com\//i.test(normalized) && !normalized.endsWith(".git")) {
+    return `${normalized}.git`;
   }
-  return trimmed;
+  return normalized;
+}
+
+function parseGitHubRepository(repoUrl) {
+  const normalized = normalizeRepoUrl(repoUrl);
+  const match = normalized.match(/^https:\/\/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/i);
+  if (!match) {
+    return null;
+  }
+
+  const owner = match[1];
+  const repo = match[2];
+  return {
+    owner,
+    repo,
+    repoUrl: `https://github.com/${owner}/${repo}`,
+  };
 }
 
 function repoCacheDir(repoUrl, cacheRoot = AGENT_REPO_CACHE_ROOT) {
-  const hash = createHash("sha1").update(repoUrl).digest("hex").slice(0, 10);
+  const hash = createHash("sha1").update(buildGitCloneUrl(repoUrl)).digest("hex").slice(0, 10);
   return path.join(cacheRoot, hash);
 }
 
+function repoCheckoutMetaPath(checkoutDir) {
+  return path.join(checkoutDir, ".cclient-agent-repo.json");
+}
+
+async function readRepoCheckoutMetadata(checkoutDir) {
+  const payload = await readJsonFile(repoCheckoutMetaPath(checkoutDir), null);
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  return {
+    commit: typeof payload.commit === "string" ? payload.commit : "",
+    downloadedAt: typeof payload.downloadedAt === "string" ? payload.downloadedAt : "",
+    provider: typeof payload.provider === "string" ? payload.provider : "",
+    repoUrl: typeof payload.repoUrl === "string" ? payload.repoUrl : "",
+  };
+}
+
+async function writeRepoCheckoutMetadata(checkoutDir, payload) {
+  await writeFile(
+    repoCheckoutMetaPath(checkoutDir),
+    `${JSON.stringify(payload, null, 2)}\n`,
+    "utf8",
+  );
+}
+
+async function resolveRepoCheckoutCommit(checkoutDir) {
+  const metadata = await readRepoCheckoutMetadata(checkoutDir);
+  if (metadata?.commit) {
+    return metadata.commit;
+  }
+
+  if (existsSync(path.join(checkoutDir, ".git"))) {
+    return runGit(["rev-parse", "HEAD"], checkoutDir).catch(() => "local-cache");
+  }
+
+  return "local-cache";
+}
+
+async function fetchJson(url, init = {}) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": "C-CLIENT",
+      ...(init.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`请求失败：${response.status} ${response.statusText}`);
+  }
+
+  return response.json();
+}
+
+async function downloadFile(url, filePath, init = {}) {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      "User-Agent": "C-CLIENT",
+      ...(init.headers || {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`下载失败：${response.status} ${response.statusText}`);
+  }
+
+  const fileBuffer = Buffer.from(await response.arrayBuffer());
+  await writeFile(filePath, fileBuffer);
+}
+
+async function fetchGitHubArchiveInfo(repoUrl) {
+  const githubRepo = parseGitHubRepository(repoUrl);
+  if (!githubRepo) {
+    return null;
+  }
+
+  const repoInfo = await fetchJson(
+    `https://api.github.com/repos/${githubRepo.owner}/${githubRepo.repo}`,
+  );
+  const defaultBranch = String(repoInfo.default_branch || "main");
+  const commitInfo = await fetchJson(
+    `https://api.github.com/repos/${githubRepo.owner}/${githubRepo.repo}/commits/${encodeURIComponent(defaultBranch)}`,
+  );
+  const commit = String(commitInfo.sha || "").trim() || defaultBranch;
+
+  return {
+    commit,
+    provider: "github-archive",
+    repoUrl: githubRepo.repoUrl,
+    tarballUrl: `https://api.github.com/repos/${githubRepo.owner}/${githubRepo.repo}/tarball/${encodeURIComponent(commit)}`,
+  };
+}
+
+async function extractTarArchive(archivePath, targetDir) {
+  if (!(await commandExists("tar"))) {
+    throw new Error("当前环境缺少 tar，无法解压 Agent 仓库归档");
+  }
+
+  await runCommand(
+    "tar",
+    ["-xzf", archivePath, "-C", targetDir, "--strip-components", "1"],
+    process.cwd(),
+  );
+}
+
+async function downloadGitHubRepoCheckout(repoUrl, checkoutDir) {
+  const archiveInfo = await fetchGitHubArchiveInfo(repoUrl);
+  if (!archiveInfo) {
+    return null;
+  }
+
+  const parentDir = path.dirname(checkoutDir);
+  const tempDir = `${checkoutDir}.tmp`;
+  const archivePath = path.join(
+    parentDir,
+    `${path.basename(checkoutDir)}-${archiveInfo.commit.slice(0, 12) || "archive"}.tar.gz`,
+  );
+  let moved = false;
+
+  await mkdir(parentDir, { recursive: true });
+  await rm(tempDir, { force: true, recursive: true }).catch(() => {});
+  await rm(archivePath, { force: true }).catch(() => {});
+  await mkdir(tempDir, { recursive: true });
+
+  try {
+    await downloadFile(archiveInfo.tarballUrl, archivePath);
+    await extractTarArchive(archivePath, tempDir);
+    await writeRepoCheckoutMetadata(tempDir, {
+      commit: archiveInfo.commit,
+      downloadedAt: new Date().toISOString(),
+      provider: archiveInfo.provider,
+      repoUrl: archiveInfo.repoUrl,
+    });
+    await rm(checkoutDir, { force: true, recursive: true }).catch(() => {});
+    await rename(tempDir, checkoutDir);
+    moved = true;
+    return archiveInfo;
+  } finally {
+    await rm(archivePath, { force: true }).catch(() => {});
+    if (!moved) {
+      await rm(tempDir, { force: true, recursive: true }).catch(() => {});
+    }
+  }
+}
+
 async function ensureRepoCheckout(repoUrl, refresh = false, cacheRoot = AGENT_REPO_CACHE_ROOT) {
-  const normalizedRepoUrl = sanitizeRepoUrl(repoUrl);
+  const normalizedRepoUrl = normalizeRepoUrl(repoUrl);
+  const cloneRepoUrl = buildGitCloneUrl(normalizedRepoUrl);
   const checkoutDir = repoCacheDir(normalizedRepoUrl, cacheRoot);
+  const githubRepo = parseGitHubRepository(normalizedRepoUrl);
 
   await mkdir(cacheRoot, { recursive: true });
 
   try {
     if (!existsSync(checkoutDir)) {
-      try {
+      if (githubRepo) {
+        await downloadGitHubRepoCheckout(normalizedRepoUrl, checkoutDir);
+      } else {
         await runGit(
-          ["-c", "http.version=HTTP/1.1", "clone", "--depth", "1", normalizedRepoUrl, checkoutDir],
-          process.cwd(),
-        );
-      } catch (error) {
-        await rm(checkoutDir, { force: true, recursive: true }).catch(() => {});
-        await runGit(
-          ["-c", "http.version=HTTP/1.1", "clone", "--depth", "1", normalizedRepoUrl, checkoutDir],
+          ["-c", "http.version=HTTP/1.1", "clone", "--depth", "1", cloneRepoUrl, checkoutDir],
           process.cwd(),
         );
       }
     } else if (refresh) {
-      await runGit(["-c", "http.version=HTTP/1.1", "fetch", "--depth", "1", "origin"], checkoutDir);
-      await runGit(["reset", "--hard", "FETCH_HEAD"], checkoutDir);
-      await runGit(["clean", "-fd"], checkoutDir);
+      if (githubRepo) {
+        await downloadGitHubRepoCheckout(normalizedRepoUrl, checkoutDir);
+      } else {
+        await runGit(["-c", "http.version=HTTP/1.1", "fetch", "--depth", "1", "origin"], checkoutDir);
+        await runGit(["reset", "--hard", "FETCH_HEAD"], checkoutDir);
+        await runGit(["clean", "-fd"], checkoutDir);
+      }
     }
   } catch (error) {
     const fallbackDir =
@@ -2011,11 +2936,11 @@ async function ensureRepoCheckout(repoUrl, refresh = false, cacheRoot = AGENT_RE
       throw error;
     }
 
-    const fallbackCommit = await runGit(["rev-parse", "HEAD"], fallbackDir).catch(() => "local-fallback");
+    const fallbackCommit = await resolveRepoCheckoutCommit(fallbackDir).catch(() => "local-fallback");
     return {
       checkoutDir: fallbackDir,
       commit: fallbackCommit,
-      repoUrl: normalizedRepoUrl,
+      repoUrl: githubRepo?.repoUrl ?? normalizedRepoUrl,
       warning:
         error instanceof Error
           ? `仓库同步失败，已使用本地缓存：${error.message}`
@@ -2023,11 +2948,25 @@ async function ensureRepoCheckout(repoUrl, refresh = false, cacheRoot = AGENT_RE
     };
   }
 
-  const commit = await runGit(["rev-parse", "HEAD"], checkoutDir);
+  if (!existsSync(checkoutDir)) {
+    throw new Error("Agent 仓库缓存目录不存在");
+  }
+
+  if (!githubRepo && existsSync(path.join(checkoutDir, ".git"))) {
+    const commit = await runGit(["rev-parse", "HEAD"], checkoutDir);
+    return {
+      checkoutDir,
+      commit,
+      repoUrl: normalizedRepoUrl,
+      warning: "",
+    };
+  }
+
+  const commit = await resolveRepoCheckoutCommit(checkoutDir);
   return {
     checkoutDir,
     commit,
-    repoUrl: normalizedRepoUrl,
+    repoUrl: githubRepo?.repoUrl ?? normalizedRepoUrl,
     warning: "",
   };
 }
@@ -2136,11 +3075,14 @@ async function initializeWorkspace(payload) {
 
   const workspacePath = path.join(projectRoot, company, department, employeeName, projectName);
   const artifactsDir = path.join(workspacePath, "artifacts");
+  const referencesDir = path.join(workspacePath, "references");
   const runtimeDir = path.join(workspacePath, "runtime");
   const createdAt = new Date().toISOString();
 
   await mkdir(artifactsDir, { recursive: true });
+  await mkdir(referencesDir, { recursive: true });
   await mkdir(runtimeDir, { recursive: true });
+  await ensureWorkspaceAgentsFile(projectRoot, workspacePath);
 
   const meta = {
     agentRepoSource: payload.repoSource ?? "",
@@ -2205,10 +3147,7 @@ async function initializeWorkspace(payload) {
     path.join(workspacePath, "block.md"),
     "# 阻塞记录\n\n- 暂无阻塞\n",
   );
-  await ensureTextFile(
-    path.join(workspacePath, "agent.md"),
-    String(payload.agentDefinitionText || "").trim() || "# Agent 定义\n\n待补充\n",
-  );
+  await ensureWorkspaceRoleFile(workspacePath, String(payload.agentDefinitionText || "").trim());
   await ensureTextFile(
     path.join(runtimeDir, "meta.json"),
     `${JSON.stringify(meta, null, 2)}\n`,
@@ -2233,6 +3172,7 @@ async function initializeWorkspace(payload) {
   return {
     created: true,
     files: [
+      "AGENTS.md",
       "current.md",
       "plan.md",
       "workspace_guide.md",
@@ -2243,9 +3183,10 @@ async function initializeWorkspace(payload) {
       "wait_finished.md",
       "finished.md",
       "block.md",
-      "agent.md",
+      "ROLE.md",
       "runtime/meta.json",
       "artifacts/",
+      "references/",
     ],
     workspacePath: workspacePath.replace(/\\/g, "/"),
   };
@@ -2261,7 +3202,8 @@ function deriveProjectNameFromWorkspace(workspacePath) {
 
 function employeeRootFiles(employeeRoot) {
   return {
-    agentPath: path.join(employeeRoot, "agent.md"),
+    legacyAgentPath: path.join(employeeRoot, "agent.md"),
+    rolePath: path.join(employeeRoot, "ROLE.md"),
     currentProjectPath: path.join(employeeRoot, "current-project.json"),
     deliveriesIndexPath: path.join(employeeRoot, "deliveries-index.json"),
     dispatchQueuePath: path.join(employeeRoot, "dispatch-queue.json"),
@@ -2288,8 +3230,8 @@ async function ensureEmployeeRootMetadata({
   const normalizedEmployeeRoot = employeeRoot.replace(/\\/g, "/");
 
   await ensureTextFile(
-    files.agentPath,
-    String(agentDefinitionText || "").trim() || "# Agent 定义\n\n待补充\n",
+    files.rolePath,
+    normalizeMarkdownContent(agentDefinitionText, "# ROLE.md\n\n待补充\n"),
   );
 
   await ensureTextFile(
@@ -2447,12 +3389,10 @@ async function ensureProjectWorkspaceForAssignment(currentWorkspacePath, project
   const employeeRoot = deriveEmployeeRootFromWorkspace(currentWorkspacePath);
   const files = employeeRootFiles(employeeRoot);
   const employeeProfile = await readJsonFile(files.employeeProfilePath, currentMeta);
-  const agentDefinitionText =
-    (await readOptionalTextFile(files.agentPath)) ||
-    (await readOptionalTextFile(path.join(currentWorkspacePath, "agent.md")));
+  const roleDefinitionText = await resolveRoleDefinitionText(currentWorkspacePath, employeeRoot);
 
   const result = await initializeWorkspace({
-    agentDefinitionText,
+    agentDefinitionText: roleDefinitionText,
     autoTrustWorkspace: employeeProfile.autoTrustWorkspace,
     company: employeeProfile.company ?? currentMeta.company ?? path.basename(path.dirname(employeeRoot)),
     department: employeeProfile.department ?? currentMeta.department ?? path.basename(employeeRoot),
@@ -2532,7 +3472,8 @@ async function buildCodexStartupPrompt(workspacePath) {
   return [
     "你现在是一个已经应用了员工 Agent 定义的 Codex CLI 会话。",
     `当前项目空间：${normalizedWorkspace}`,
-    "启动后请先在项目空间中阅读 agent.md 和 workspace_guide.md，不要跳过这一步。",
+    "项目空间中的 AGENTS.md 会作为长期规则自动生效，但你仍然要主动阅读 ROLE.md。",
+    "启动后请先阅读 AGENTS.md、ROLE.md 和 task_request.md；如果任务里列出了 references/ 资料，也要优先查看。",
     "下面只附带最关键的任务与恢复摘要，避免在会话初始化时注入过多上下文。",
     "你的第一步不是立刻执行，而是先根据 task_request.md 生成或更新 plan.md。",
     "在完成计划之前，不要把自己当作普通 shell 去直接执行任务。",
@@ -2556,6 +3497,14 @@ function buildCodexExecPermissionArgs(permission) {
   }
 
   return ["-s", "workspace-write"];
+}
+
+function buildCodexImageArgs(imagePaths) {
+  const normalizedPaths = Array.isArray(imagePaths)
+    ? imagePaths.map((value) => String(value || "").trim()).filter(Boolean)
+    : [];
+
+  return normalizedPaths.length > 0 ? ["-i", ...normalizedPaths] : [];
 }
 
 function buildStartupAckExecPrompt(workspacePath) {
@@ -2666,11 +3615,27 @@ async function runStartupAckPreflight({ cwd, permission, shell }) {
 async function resolveRuntimeLaunch({ cwd, permission, shell }) {
   const resolvedShell = await resolveShell(shell);
   const resolvedCwd = resolveCwd(cwd);
-  const hasWorkspaceGuide = existsSync(path.join(resolvedCwd, "workspace_guide.md"));
-  const hasAgentDefinition = existsSync(path.join(resolvedCwd, "agent.md"));
+  const projectRoot = deriveProjectRootFromWorkspace(resolvedCwd);
+  await ensureWorkspaceAgentsFile(projectRoot, resolvedCwd);
+  const roleDefinitionText = await resolveRoleDefinitionText(resolvedCwd);
+  if (roleDefinitionText.trim()) {
+    await ensureWorkspaceRoleFile(resolvedCwd, roleDefinitionText);
+  }
+
+  const runtimeMeta = await readJsonFile(path.join(resolvedCwd, "runtime", "meta.json"), {});
+  const startupImagePaths = Array.isArray(runtimeMeta?.lastAssignedReferences)
+    ? runtimeMeta.lastAssignedReferences
+        .filter((reference) => Boolean(reference?.isImage))
+        .map((reference) => String(reference?.absolutePath || "").trim())
+        .filter((absolutePath) => absolutePath && existsSync(absolutePath))
+        .slice(0, 4)
+    : [];
+  const codexImageArgs = buildCodexImageArgs(startupImagePaths);
+  const hasWorkspaceRules = existsSync(path.join(resolvedCwd, "AGENTS.md"));
+  const hasRoleDefinition = existsSync(path.join(resolvedCwd, "ROLE.md"));
   const codexAvailable = await commandExists("codex");
 
-  if (codexAvailable && hasWorkspaceGuide && hasAgentDefinition) {
+  if (codexAvailable && hasWorkspaceRules && hasRoleDefinition) {
     void runStartupAckPreflight({
       cwd: resolvedCwd,
       permission,
@@ -2699,13 +3664,17 @@ async function resolveRuntimeLaunch({ cwd, permission, shell }) {
       const permissionArgs = buildCodexPermissionArgs(permission)
         .map((value) => `'${escapePowerShellSingleQuoted(value)}'`)
         .join(", ");
+      const imageArgs = codexImageArgs
+        .map((value) => `'${escapePowerShellSingleQuoted(value)}'`)
+        .join(", ");
+      const extraImageArgs = imageArgs ? `${imageArgs}, ` : "";
 
       return {
         args: [
           "-NoLogo",
           "-NoExit",
           "-Command",
-          `$bootstrapPrompt = Get-Content -LiteralPath '${quotedBootstrapPath}' -Raw; $codexArgs = @('--no-alt-screen', '-C', '${quotedCwd}', ${permissionArgs}, $bootstrapPrompt); & codex @codexArgs`,
+          `$bootstrapPrompt = Get-Content -LiteralPath '${quotedBootstrapPath}' -Raw; $codexArgs = @('--no-alt-screen', '-C', '${quotedCwd}', ${extraImageArgs}${permissionArgs}, $bootstrapPrompt); & codex @codexArgs`,
         ],
         command: wrapperShell,
         cwd: resolvedCwd,
@@ -2719,6 +3688,7 @@ async function resolveRuntimeLaunch({ cwd, permission, shell }) {
           "--no-alt-screen",
           "-C",
           resolvedCwd,
+          ...codexImageArgs,
           ...buildCodexPermissionArgs(permission),
           codexStartupPrompt,
         ],
@@ -3367,6 +4337,66 @@ const server = http.createServer((request, response) => {
     return;
   }
 
+  if (request.method === "POST" && url.pathname === "/api/settings/codex/load") {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        await ensureAuthorizedRequest(request, payload, url);
+        const result = await loadCodexSettings();
+        writeJson(response, 200, result);
+      } catch (error) {
+        writeJson(response, 400, {
+          error: error instanceof Error ? error.message : "codex settings load failed",
+        });
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/settings/codex/save") {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        await ensureAuthorizedRequest(request, payload, url);
+        const result = await saveCodexSettings(payload);
+        writeJson(response, 200, result);
+      } catch (error) {
+        writeJson(response, 400, {
+          error: error instanceof Error ? error.message : "codex settings save failed",
+        });
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/settings/codex/test") {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        await ensureAuthorizedRequest(request, payload, url);
+        const result = await testCodexSettings(payload);
+        writeJson(response, 200, result);
+      } catch (error) {
+        writeJson(response, 400, {
+          error: error instanceof Error ? error.message : "codex settings test failed",
+        });
+      }
+    });
+    return;
+  }
+
   if (request.method === "POST" && url.pathname === "/api/agent-repo/list") {
     let body = "";
     request.on("data", (chunk) => {
@@ -3598,6 +4628,91 @@ const server = http.createServer((request, response) => {
         });
       }
     });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/employee/delete") {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        await ensureAuthorizedRequest(request, payload, url);
+        const result = await deleteEmployeeWorkspace(payload);
+        writeJson(response, 200, result);
+      } catch (error) {
+        writeJson(response, 400, {
+          error: error instanceof Error ? error.message : "employee delete failed",
+        });
+      }
+    });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/download/file") {
+    void (async () => {
+      try {
+        const targetPath = String(url.searchParams.get("path") || "").trim();
+        const workspacePath = String(url.searchParams.get("workspacePath") || "").trim();
+        const filename = String(url.searchParams.get("filename") || "").trim();
+
+        if (!targetPath) {
+          writeJson(response, 400, { error: "path is required" });
+          return;
+        }
+
+        await ensureAuthorizedRequest(
+          request,
+          {
+            path: targetPath,
+            workspacePath,
+          },
+          url,
+        );
+        await streamFileDownload(
+          response,
+          targetPath,
+          filename || path.basename(targetPath),
+        );
+      } catch (error) {
+        if (!response.headersSent) {
+          writeJson(response, 400, {
+            error: error instanceof Error ? error.message : "file download failed",
+          });
+        } else {
+          response.destroy();
+        }
+      }
+    })();
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/download/archive") {
+    void (async () => {
+      try {
+        const workspacePath = String(url.searchParams.get("workspacePath") || "").trim();
+        const scope = String(url.searchParams.get("scope") || "project").trim();
+
+        await ensureAuthorizedRequest(
+          request,
+          {
+            workspacePath,
+          },
+          url,
+        );
+        await streamResultsArchiveDownload(response, workspacePath, scope);
+      } catch (error) {
+        if (!response.headersSent) {
+          writeJson(response, 400, {
+            error: error instanceof Error ? error.message : "archive download failed",
+          });
+        } else {
+          response.destroy();
+        }
+      }
+    })();
     return;
   }
 

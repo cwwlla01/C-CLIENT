@@ -218,14 +218,17 @@ type RuntimeDetailModalProps = {
   projectSpaces: ProjectSpaceEntry[];
   projectSpacesLoading: boolean;
   onClose: () => void;
-  onOpenAgentFile: (memberId: string) => void;
+  onDownloadEmployeeHistoryBundle: (workspacePath: string) => void;
+  onDownloadHistoryFile: (filePath: string, workspacePath?: string | null) => void;
+  onDownloadProjectHistoryBundle: (workspacePath: string, projectName: string) => void;
   onOpenHistoryFile: (filePath: string) => void;
   onOpenHistoryFolder: (folderPath: string) => void;
   onOpenPlanFile: (memberId: string) => void;
   onOpenRestoreSummaryFile: (memberId: string) => void;
+  onOpenRoleFile: (memberId: string) => void;
   onOpenStartupAckFile: (memberId: string) => void;
   onOpenTaskRequestFile: (memberId: string) => void;
-  onOpenWorkspaceGuideFile: (memberId: string) => void;
+  onOpenWorkspaceRulesFile: (memberId: string) => void;
   onCopySessionId: (memberId: string) => void;
   onCopyWorkspace: (memberId: string) => void;
   onEnterTerminal: (memberId: string) => void;
@@ -233,6 +236,7 @@ type RuntimeDetailModalProps = {
   onOpenWorkspace: (memberId: string) => void;
   onSwitchProjectSpace: (memberId: string, workspacePath: string) => void;
   onCompleteTask: (memberId: string) => void;
+  onDeleteEmployee: (memberId: string) => Promise<boolean> | boolean;
   onRetryStartupAck: (memberId: string) => void;
   onRestartRuntime: (memberId: string) => void;
   onStopRuntime: (memberId: string) => void;
@@ -257,14 +261,17 @@ export function RuntimeDetailModal({
   projectSpaces,
   projectSpacesLoading,
   onClose,
-  onOpenAgentFile,
+  onDownloadEmployeeHistoryBundle,
+  onDownloadHistoryFile,
+  onDownloadProjectHistoryBundle,
   onOpenHistoryFile,
   onOpenHistoryFolder,
   onOpenPlanFile,
   onOpenRestoreSummaryFile,
+  onOpenRoleFile,
   onOpenStartupAckFile,
   onOpenTaskRequestFile,
-  onOpenWorkspaceGuideFile,
+  onOpenWorkspaceRulesFile,
   onCopySessionId,
   onCopyWorkspace,
   onEnterTerminal,
@@ -272,6 +279,7 @@ export function RuntimeDetailModal({
   onOpenWorkspace,
   onSwitchProjectSpace,
   onCompleteTask,
+  onDeleteEmployee,
   onRetryStartupAck,
   onRestartRuntime,
   onStopRuntime,
@@ -283,10 +291,14 @@ export function RuntimeDetailModal({
   const [promptAutomationDraft, setPromptAutomationDraft] = useState<RuntimeMember["automationSettings"]["promptAutomation"]>("safe_auto");
   const [elevationDraft, setElevationDraft] = useState<RuntimeMember["automationSettings"]["elevationMode"]>("manual");
   const [autoTrustDraft, setAutoTrustDraft] = useState(true);
+  const [fireConfirmOpen, setFireConfirmOpen] = useState(false);
+  const [isFiringEmployee, setIsFiringEmployee] = useState(false);
 
   useEffect(() => {
     setActiveTab("info");
     setHistoryProjectFilter("all");
+    setFireConfirmOpen(false);
+    setIsFiringEmployee(false);
   }, [member?.id]);
 
   useEffect(() => {
@@ -374,12 +386,15 @@ export function RuntimeDetailModal({
 
   const groupedHistory = useMemo(
     () =>
-      mergedHistory.reduce<Array<{ entries: MergedHistoryEntry[]; projectName: string }>>(
+      mergedHistory.reduce<Array<{ entries: MergedHistoryEntry[]; projectName: string; workspacePath: string | null }>>(
         (result, entry) => {
           const projectName = entry.projectName || "未命名项目";
           const existing = result.find((group) => group.projectName === projectName);
           if (existing) {
             existing.entries.push(entry);
+            if (!existing.workspacePath && entry.workspacePath) {
+              existing.workspacePath = entry.workspacePath;
+            }
             return result;
           }
 
@@ -388,6 +403,7 @@ export function RuntimeDetailModal({
             {
               entries: [entry],
               projectName,
+              workspacePath: entry.workspacePath ?? null,
             },
           ];
         },
@@ -578,11 +594,11 @@ export function RuntimeDetailModal({
                   <div className="card bg-base-100 p-3 shadow-none">
                     <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">上下文资料</p>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <button className="btn btn-outline btn-sm" onClick={() => onOpenAgentFile(member.id)} type="button">
-                        agent.md
+                      <button className="btn btn-outline btn-sm" onClick={() => onOpenRoleFile(member.id)} type="button">
+                        ROLE.md
                       </button>
-                      <button className="btn btn-outline btn-sm" onClick={() => onOpenWorkspaceGuideFile(member.id)} type="button">
-                        workspace_guide.md
+                      <button className="btn btn-outline btn-sm" onClick={() => onOpenWorkspaceRulesFile(member.id)} type="button">
+                        AGENTS.md
                       </button>
                       <button className="btn btn-outline btn-sm" onClick={() => onOpenRestoreSummaryFile(member.id)} type="button">
                         restore_summary.md
@@ -865,35 +881,44 @@ export function RuntimeDetailModal({
                 <p className="mt-2 text-xs text-shell-muted">
                   展示当前员工在不同项目下的聚合成果，文件仍保留在各自项目工作空间中。
                 </p>
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <button
-                    className={`btn btn-xs ${historyProjectFilter === "all" ? "btn-primary" : "btn-outline"}`}
-                    onClick={() => setHistoryProjectFilter("all")}
-                    type="button"
-                  >
-                    全部项目
-                  </button>
-                  {member.projectName ? (
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
                     <button
-                      className={`btn btn-xs ${historyProjectFilter === member.projectName ? "btn-primary" : "btn-outline"}`}
-                      onClick={() => setHistoryProjectFilter(member.projectName)}
+                      className={`btn btn-xs ${historyProjectFilter === "all" ? "btn-primary" : "btn-outline"}`}
+                      onClick={() => setHistoryProjectFilter("all")}
                       type="button"
                     >
-                      当前项目
+                      全部项目
                     </button>
-                  ) : null}
-                  {availableHistoryProjects
-                    .filter((projectName) => projectName !== member.projectName)
-                    .map((projectName) => (
+                    {member.projectName ? (
                       <button
-                        key={projectName}
-                        className={`btn btn-xs ${historyProjectFilter === projectName ? "btn-primary" : "btn-outline"}`}
-                        onClick={() => setHistoryProjectFilter(projectName)}
+                        className={`btn btn-xs ${historyProjectFilter === member.projectName ? "btn-primary" : "btn-outline"}`}
+                        onClick={() => setHistoryProjectFilter(member.projectName)}
                         type="button"
                       >
-                        {projectName}
+                        当前项目
                       </button>
-                    ))}
+                    ) : null}
+                    {availableHistoryProjects
+                      .filter((projectName) => projectName !== member.projectName)
+                      .map((projectName) => (
+                        <button
+                          key={projectName}
+                          className={`btn btn-xs ${historyProjectFilter === projectName ? "btn-primary" : "btn-outline"}`}
+                          onClick={() => setHistoryProjectFilter(projectName)}
+                          type="button"
+                        >
+                          {projectName}
+                        </button>
+                      ))}
+                  </div>
+                  <button
+                    className="btn btn-outline btn-xs"
+                    onClick={() => onDownloadEmployeeHistoryBundle(member.workspace)}
+                    type="button"
+                  >
+                    下载全部成果包
+                  </button>
                 </div>
                 {historyLoading ? (
                   <div className="mt-3 space-y-2 text-sm text-shell-muted">
@@ -907,11 +932,24 @@ export function RuntimeDetailModal({
                   <div className="mt-3 space-y-4">
                     {filteredGroupedHistory.map((group) => (
                       <section key={group.projectName} className="space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="badge badge-outline rounded-md">{group.projectName}</span>
-                          <span className="text-xs text-shell-muted">
-                            {group.entries.length} 项成果
-                          </span>
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="badge badge-outline rounded-md">{group.projectName}</span>
+                            <span className="text-xs text-shell-muted">
+                              {group.entries.length} 项成果
+                            </span>
+                          </div>
+                          {group.workspacePath ? (
+                            <button
+                              className="btn btn-outline btn-xs"
+                              onClick={() =>
+                                onDownloadProjectHistoryBundle(group.workspacePath!, group.projectName)
+                              }
+                              type="button"
+                            >
+                              下载项目成果
+                            </button>
+                          ) : null}
                         </div>
                         <div className="space-y-3">
                           {group.entries.map((entry) => (
@@ -935,9 +973,20 @@ export function RuntimeDetailModal({
                                 </div>
                                 <div className="flex flex-wrap gap-2">
                                   {entry.filePath ? (
-                                    <button className="btn btn-outline btn-xs" onClick={() => onOpenHistoryFile(entry.filePath!)} type="button">
-                                      打开文件
-                                    </button>
+                                    <>
+                                      <button
+                                        className="btn btn-primary btn-xs"
+                                        onClick={() =>
+                                          onDownloadHistoryFile(entry.filePath!, entry.workspacePath)
+                                        }
+                                        type="button"
+                                      >
+                                        下载文件
+                                      </button>
+                                      <button className="btn btn-outline btn-xs" onClick={() => onOpenHistoryFile(entry.filePath!)} type="button">
+                                        打开文件
+                                      </button>
+                                    </>
                                   ) : null}
                                   <button className="btn btn-outline btn-xs" onClick={() => onOpenHistoryFolder(entry.folderPath)} type="button">
                                     {entry.kind === "finished" ? "打开交付物文件夹" : "打开文件夹"}
@@ -1033,7 +1082,16 @@ export function RuntimeDetailModal({
         </div>
 
         <div className="shrink-0 border-t border-base-300 bg-base-100 px-5 py-4">
-          <div className="modal-action mt-0 justify-end">
+          <div className="modal-action mt-0 justify-between">
+            <button
+              className="btn btn-error btn-outline px-4"
+              disabled={isRestarting || isFiringEmployee}
+              onClick={() => setFireConfirmOpen(true)}
+              type="button"
+            >
+              辞退员工
+            </button>
+            <div className="flex flex-wrap justify-end gap-2">
             <button
               className="btn btn-success px-4"
               disabled={member.currentTask === "暂无" || isRestarting}
@@ -1061,6 +1119,7 @@ export function RuntimeDetailModal({
             >
               进入终端
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1069,6 +1128,60 @@ export function RuntimeDetailModal({
           关闭
         </button>
       </form>
+
+      {fireConfirmOpen ? (
+        <dialog open className="modal z-[120] bg-base-content/40 backdrop-blur-sm">
+          <div className="modal-box max-w-[520px]">
+            <h3 className="text-lg font-bold text-base-content">确认辞退员工</h3>
+            <p className="mt-3 text-sm leading-6 text-base-content/75">
+              你将辞退 <span className="font-semibold text-base-content">{member.name}</span>。
+            </p>
+            <div className="mt-4 rounded-box border border-error/20 bg-error/10 px-4 py-4 text-sm text-base-content/80">
+              <p>这会执行以下动作：</p>
+              <p className="mt-2">1. 停止该员工当前 CLI 会话</p>
+              <p>2. 删除该员工根目录及名下全部项目空间</p>
+              <p>3. 从当前调度台画布中移除该员工</p>
+            </div>
+            <p className="mt-4 break-all text-xs text-base-content/55">
+              目标路径：{member.workspace}
+            </p>
+            <div className="modal-action mt-6">
+              <button
+                className="btn btn-outline"
+                disabled={isFiringEmployee}
+                onClick={() => setFireConfirmOpen(false)}
+                type="button"
+              >
+                取消
+              </button>
+              <button
+                className={`btn btn-error ${isFiringEmployee ? "loading" : ""}`}
+                disabled={isFiringEmployee}
+                onClick={async () => {
+                  setIsFiringEmployee(true);
+                  const success = await onDeleteEmployee(member.id);
+                  setIsFiringEmployee(false);
+                  if (success) {
+                    setFireConfirmOpen(false);
+                  }
+                }}
+                type="button"
+              >
+                {isFiringEmployee ? "辞退中..." : "确认辞退"}
+              </button>
+            </div>
+          </div>
+          <form className="modal-backdrop" method="dialog">
+            <button
+              disabled={isFiringEmployee}
+              onClick={() => setFireConfirmOpen(false)}
+              type="button"
+            >
+              关闭
+            </button>
+          </form>
+        </dialog>
+      ) : null}
     </dialog>
   );
 }

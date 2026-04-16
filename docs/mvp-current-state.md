@@ -18,8 +18,11 @@
 ### 2.1 员工与项目空间
 
 - 创建员工
+- 删除员工
 - 初始化员工项目空间
-- 写入 `agent.md`、`workspace_guide.md`、`task_request.md`、`startup_ack.md`、`plan.md`、`current.md`、`wait_finished.md`、`finished.md`、`block.md`
+- 写入 `AGENTS.md`、`ROLE.md`、`workspace_guide.md`、`task_request.md`、`startup_ack.md`、`plan.md`、`current.md`、`wait_finished.md`、`finished.md`、`block.md`
+- 自动维护模板：
+  - `{项目路径}/setting/templates/AGENTS.md`
 - 建立员工根目录元数据：
   - `employee.json`
   - `current-project.json`
@@ -34,10 +37,13 @@
 - 恢复已存在员工工作空间
 - 以 Codex 模式优先启动员工会话
 - 启动时自动生成 `restore_summary.md` 与 `codex_bootstrap.md`
+- 启动前自动确保项目空间内存在 `AGENTS.md + ROLE.md`
+- 已通过真实 `codex exec` 验证项目空间内的 `AGENTS.md` 会被加载
 
 ### 2.3 任务流转
 
 - 发布原始需求到员工
+- 发布任务时支持附带文件、图片等参考资料
 - 任务优先级 / 时间窗口 / 指派来源
 - 同项目直接分配
 - 跨项目分配
@@ -45,10 +51,15 @@
   - 当前项目未完成时进入员工级切换队列
 - 完成任务后自动归档
 - 若员工级切换队列存在下一个项目，则自动切到目标项目
+- 参考资料会保存到项目空间的 `references/`
 
 ### 2.4 监督 UI
 
 - 运行终端画布
+- 首次启动引导
+  - 配置 Codex
+  - 创建第一个员工
+  - 发布第一条任务
 - 公司筛选
 - 运行状态筛选
 - 员工详情弹窗 4 个视角：
@@ -66,6 +77,10 @@
 - 默认按项目分组展示
 - 优先读取 `deliveries-index.json`
 - 若索引为空，则回退扫描员工名下所有项目目录
+- 支持下载：
+  - 单个交付物文件
+  - 单项目成果包
+  - 员工全部成果包
 
 ### 2.6 提示自动化
 
@@ -94,6 +109,30 @@
   - 本地 REST API
   - 本地 `/terminal` WebSocket
 
+### 2.8 Codex 配置
+
+- 设置页新增 `Codex 配置` tab
+- 首次启动自动弹出引导
+- 支持表单配置：
+  - `model_provider`
+  - `model`
+  - `review_model`
+  - `model_reasoning_effort`
+  - `disable_response_storage`
+  - `network_access`
+  - `windows_wsl_setup_acknowledged`
+  - `model_context_window`
+  - `model_auto_compact_token_limit`
+  - `[model_providers.custom]`
+  - `OPENAI_API_KEY`
+  - `auth_mode`
+- 支持 `config.toml` 源文件编辑模式
+- 支持连通性测试
+- 默认写入：
+  - `{CODEX_HOME}/config.toml`
+  - `{CODEX_HOME}/auth.json`
+  - 未设置时使用 `~/.codex`
+
 ## 3. 当前 UI 结构
 
 ### 3.1 顶部导航
@@ -104,6 +143,7 @@
 - 添加员工
 - 扫描员工
 - 设置
+- 设置菜单中可重新打开“首次引导”
 
 ### 3.2 员工卡片
 
@@ -155,7 +195,7 @@
 
 用于保存员工级长期元数据：
 
-- `agent.md`
+- `ROLE.md`
 - `employee.json`
 - `current-project.json`
 - `dispatch-queue.json`
@@ -165,6 +205,8 @@
 
 每个项目是一个独立工作空间：
 
+- `<project>/AGENTS.md`
+- `<project>/ROLE.md`
 - `<project>/current.md`
 - `<project>/plan.md`
 - `<project>/task_request.md`
@@ -193,6 +235,7 @@
 ## 6. 当前已知限制
 
 - 服务端还未真正接入，目前以本地 bridge 为主
+- Codex 连通性测试当前只验证 `{baseUrl}/models`，不代表完整执行链路一定全部可用
 - “项目空间” tab 当前只支持打开目录，尚未支持“直接切到该项目”
 - `deliveries-index.json` 会持续被新完成任务补齐；历史老项目目前依赖回退扫描
 - 提示白名单第一版只支持文本包含，不支持正则、优先级和作用域

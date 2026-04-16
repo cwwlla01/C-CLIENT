@@ -152,8 +152,8 @@ Markdown 文件给人和 Agent 阅读：
 而应该做：
 
 1. 进入员工项目空间
-2. 读取 `agent.md`
-3. 读取 `workspace_guide.md`
+2. 确保 `AGENTS.md` 已位于当前项目空间
+3. 读取 `ROLE.md`
 4. 读取 `current.md` 与 `plan.md`
 5. 用这些上下文初始化 Codex
 
@@ -163,18 +163,38 @@ Markdown 文件给人和 Agent 阅读：
 
 建议每个员工项目空间都包含：
 
+- `AGENTS.md`
 - `workspace_guide.md`
+
+同时建议在项目根目录保留模板源：
+
+- `{项目路径}/setting/templates/AGENTS.md`
+
+项目空间初始化时将它复制为当前工作空间的 `AGENTS.md`，这样无论员工实际工作目录如何变化，Codex 都能在该工作空间内读取到长期规则。
 
 作用：
 
-- 告诉 Codex 当前项目空间里各文件的语义
-- 告诉 Codex 这些文件应如何被更新
-- 告诉 Codex 哪些文件属于业务上下文，哪些属于运行时元数据
+- `AGENTS.md`
+  - 让 Codex 在进入项目空间时自动加载长期规则
+  - 约束这些任务文件应如何被维护
+  - 明确产出物、阻塞记录和计划更新的基本规范
 
-它和 `agent.md` 的区别：
+- `workspace_guide.md`
+  - 作为给人类或调试场景阅读的补充说明
+  - 告诉阅读者这些文件分别代表什么
+  - 说明哪些文件是业务上下文，哪些文件是运行时元数据
 
-- `agent.md` 说明“你是谁”
-- `workspace_guide.md` 说明“你在这个项目空间里怎么工作”
+它和 `ROLE.md` 的区别：
+
+- `ROLE.md` 说明“你是谁”
+- `AGENTS.md` 说明“你必须怎么工作”
+- `workspace_guide.md` 说明“这些文件分别是什么意思”
+
+这套结构当前已经做过真实验证：
+
+- 在临时工作空间中写入特征化 `AGENTS.md`
+- 使用 `codex exec -C {workspace}` 直接提问
+- Codex 能返回只有该 `AGENTS.md` 中才有的验证 token
 
 ## 5. 持久化模型
 

@@ -3,6 +3,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        VITE_BRIDGE_HOST: 127.0.0.1
+        VITE_BRIDGE_PORT: 4281
+        VITE_DEFAULT_PROJECT_PATH: /workspace/company
     container_name: c-client
     environment:
       CCLIENT_BRIDGE_HOST: 0.0.0.0

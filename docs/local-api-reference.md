@@ -22,6 +22,35 @@
 - 除 `/health` 和 `POST /api/settings/security/load` 外，其余接口都要求正确的 API Key
 - `/terminal` WebSocket 也要求带 `token`
 
+## 1.2 Codex 配置说明
+
+当前版本已支持从本地 bridge 读取和保存 Codex 配置。
+
+- 默认目录：`{CODEX_HOME}`
+- 若未设置 `CODEX_HOME`，默认使用 `~/.codex`
+- 配置文件：
+  - `config.toml`
+  - `auth.json`
+
+当前 UI 的首次启动引导和设置页里的 `Codex 配置` tab 都使用同一套接口。
+
+另外，当前项目空间中的规则文件模型已经调整为：
+
+- `AGENTS.md`
+  - 项目空间级长期规则
+- `ROLE.md`
+  - 员工角色定义快照
+- `workspace_guide.md`
+  - 给人类和调试场景阅读的补充说明
+
+`AGENTS.md` 的模板来源：
+
+- `{项目路径}/setting/templates/AGENTS.md`
+
+初始化项目空间时会自动复制到：
+
+- `{workspacePath}/AGENTS.md`
+
 ## 2. 健康检查
 
 ### `GET /health`
@@ -90,6 +119,103 @@
 }
 ```
 
+### `POST /api/settings/codex/load`
+
+作用：
+
+- 读取本地 Codex 配置状态
+- 返回 `config.toml` / `auth.json` 路径
+- 返回当前是否已完成基础配置
+- 返回当前环境是否检测到 `codex` 命令
+
+请求体：
+
+```json
+{}
+```
+
+响应关键字段：
+
+- `codexHome`
+- `configPath`
+- `authPath`
+- `codexCommandAvailable`
+- `configured`
+- `config`
+- `auth`
+- `configToml`
+- `authJson`
+
+### `POST /api/settings/codex/save`
+
+作用：
+
+- 保存 Codex 配置
+- 支持表单字段保存
+- 支持直接写入 `configToml`
+
+请求体示例：
+
+```json
+{
+  "config": {
+    "modelProvider": "custom",
+    "model": "gpt-5.4",
+    "reviewModel": "gpt-5.4",
+    "modelReasoningEffort": "xhigh",
+    "disableResponseStorage": true,
+    "networkAccess": "enabled",
+    "windowsWslSetupAcknowledged": true,
+    "modelContextWindow": 1000000,
+    "modelAutoCompactTokenLimit": 900000,
+    "providerName": "custom",
+    "wireApi": "responses",
+    "baseUrl": "https://cpa.56781234.xyz/v1"
+  },
+  "auth": {
+    "OPENAI_API_KEY": "ap-xxxx",
+    "authMode": "apikey"
+  }
+}
+```
+
+说明：
+
+- 若同时传入 `configToml`，后端会优先按 `configToml` 原文保存
+- `auth.json` 仍由结构化字段生成
+
+### `POST /api/settings/codex/test`
+
+作用：
+
+- 对当前 Codex 配置做连通性测试
+- 当前版本通过请求 `{baseUrl}/models` 验证可用性
+
+请求体示例：
+
+```json
+{
+  "configToml": "model_provider = \"custom\"\n...",
+  "auth": {
+    "OPENAI_API_KEY": "ap-xxxx",
+    "authMode": "apikey"
+  }
+}
+```
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "message": "连接成功，已识别 2 个模型",
+  "latencyMs": 182,
+  "modelCount": 2,
+  "models": ["gpt-5.4", "gpt-5.4-mini"],
+  "testedUrl": "https://xxx/v1/models"
+}
+```
+
 ### `POST /api/workspace/init`
 
 作用：
@@ -121,6 +247,7 @@
 {
   "created": true,
   "files": [
+    "AGENTS.md",
     "current.md",
     "plan.md",
     "workspace_guide.md",
@@ -131,13 +258,21 @@
     "wait_finished.md",
     "finished.md",
     "block.md",
-    "agent.md",
+    "ROLE.md",
     "runtime/meta.json",
-    "artifacts/"
+    "artifacts/",
+    "references/"
   ],
   "workspacePath": "D:/PROJECT/COMPANY/未来智造科技/产品设计部/小白/prj-xxxx"
 }
 ```
+
+补充说明：
+
+- 当前实现会自动确保 `{projectRoot}/setting/templates/AGENTS.md` 存在
+- 然后把模板复制到当前项目空间生成 `AGENTS.md`
+- 员工角色文件写入 `ROLE.md`
+- 初始化时会预创建 `references/`，用于保存任务附带的参考资料
 
 ### `POST /api/workspace/discover`
 
@@ -382,6 +517,35 @@
 
 - 这是 `/api/workspace/history` 的员工维度别名接口，返回 `deliveries.artifacts / deliveries.finished`
 
+### `POST /api/employee/delete`
+
+作用：
+
+- 删除一个员工
+- 删除范围是整个员工根目录
+- 会连同该员工名下全部项目空间一起删除
+- 若该员工当前存在活动 CLI，会先终止会话
+
+请求体：
+
+```json
+{
+  "workspacePath": "D:/PROJECT/COMPANY/.../employee/current-project"
+}
+```
+
+响应示例：
+
+```json
+{
+  "deleted": true,
+  "employeeName": "小白",
+  "employeeRoot": "D:/PROJECT/COMPANY/.../employee",
+  "memberId": "emp-x",
+  "workspacePath": "D:/PROJECT/COMPANY/.../employee/current-project"
+}
+```
+
 ## 5. 任务接口
 
 ### `POST /api/task/assign`
@@ -406,7 +570,16 @@
   "timeWindow": "today",
   "deadlineAt": "",
   "source": "手动发布",
-  "forceCurrent": false
+  "forceCurrent": false,
+  "attachments": [
+    {
+      "name": "原型图.png",
+      "mimeType": "image/png",
+      "size": 238199,
+      "contentBase64": "...",
+      "isImage": true
+    }
+  ]
 }
 ```
 
@@ -420,6 +593,13 @@
 - `projectName`
 - `switchWorkspacePath`
 - `currentTask`
+- `attachments`
+
+补充说明：
+
+- 任务附带文件会保存到当前项目空间的 `references/`
+- `task_request.md` 会自动追加参考资料清单
+- 图片类参考资料会记录到 `runtime/meta.json`，供新启动的 Codex 会话作为图片输入使用
 
 ### `POST /api/task/retry-startup-ack`
 
@@ -660,6 +840,58 @@
 - `rules`
 
 ## 9. 路径与仓库接口
+
+### `GET /api/download/file`
+
+作用：
+
+- 直接下载单个交付物文件
+
+查询参数：
+
+- `path`
+- `workspacePath`
+- `filename`（可选）
+- `token`（启用 API 鉴权时必填）
+
+示例：
+
+```text
+GET /api/download/file?path=D%3A%2FPROJECT%2F...%2Fartifacts%2Fresult.md&workspacePath=D%3A%2FPROJECT%2F...%2Fprj-001
+```
+
+说明：
+
+- 返回文件流
+- `Content-Disposition` 会强制浏览器下载
+
+### `GET /api/download/archive`
+
+作用：
+
+- 下载成果压缩包
+
+查询参数：
+
+- `workspacePath`
+- `scope`
+  - `project`
+  - `employee`
+- `token`（启用 API 鉴权时必填）
+
+示例：
+
+```text
+GET /api/download/archive?workspacePath=D%3A%2FPROJECT%2F...%2Fprj-001&scope=project
+```
+
+说明：
+
+- `scope=project`
+  - 打包当前项目下的 `finished.md` 与 `artifacts/`
+- `scope=employee`
+  - 打包当前员工名下全部项目的成果
+- 返回 `application/zip`
 
 ### `POST /api/path/open`
 

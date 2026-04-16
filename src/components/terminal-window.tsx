@@ -8,7 +8,7 @@ import type { RuntimeMember } from "../data/mock-runtime";
 type TerminalWindowProps = {
   apiKey?: string;
   apiKeyEnabled?: boolean;
-  bridgePort?: number;
+  bridgeWsOrigin?: string;
   member: RuntimeMember | null;
   onClose: () => void;
   terminalFontSize?: number;
@@ -30,7 +30,7 @@ const stateToneMap: Record<BridgeConnectionState, string> = {
 export function TerminalWindow({
   apiKey = "",
   apiKeyEnabled = false,
-  bridgePort = 4281,
+  bridgeWsOrigin = "ws://127.0.0.1:4281",
   member,
   onClose,
   terminalFontSize = 13,
@@ -61,8 +61,9 @@ export function TerminalWindow({
       ...(apiKeyEnabled && apiKey.trim() ? { token: apiKey.trim() } : {}),
     });
 
-    return `ws://127.0.0.1:${bridgePort}/terminal?${params.toString()}`;
-  }, [apiKey, apiKeyEnabled, bridgePort, member?.id, member?.shell, member?.workspace]);
+    const normalizedOrigin = bridgeWsOrigin.replace(/\/+$/, "");
+    return `${normalizedOrigin}/terminal?${params.toString()}`;
+  }, [apiKey, apiKeyEnabled, bridgeWsOrigin, member?.id, member?.shell, member?.workspace]);
 
   const runtimeShellLabel = member?.runtimeInfo?.resolvedShell ?? member?.shell ?? "";
   const memberName = member?.name ?? "";

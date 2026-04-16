@@ -47,20 +47,47 @@
 - 覆盖本地 REST 接口与 `/terminal` WebSocket
 - 配置保存到 `{项目路径}/setting/security.json`
 
+## 当前 Codex 能力
+
+- 首次启动会自动进入引导流程
+- 引导顺序：
+  - 配置 Codex
+  - 创建第一个员工
+  - 发布第一条任务
+- 设置页已提供独立的 `Codex 配置` tab
+- 支持表单方式编辑以下配置：
+  - `config.toml`
+  - `auth.json`
+- 默认写入位置：
+  - `{CODEX_HOME}/config.toml`
+  - `{CODEX_HOME}/auth.json`
+  - 未设置 `CODEX_HOME` 时默认使用 `~/.codex`
+- 支持连通性测试
+- 支持 `config.toml` 源文件开发者编辑模式
+- 项目空间现在采用：
+  - `AGENTS.md` 作为长期规则
+  - `ROLE.md` 作为员工角色快照
+- `AGENTS.md` 模板保存在：
+  - `{项目路径}/setting/templates/AGENTS.md`
+- 初始化项目空间时会自动复制模板到当前项目空间
+- 已通过真实 `codex exec` 验证项目空间内的 `AGENTS.md` 会生效
+
 ## 当前目录模型
 
 当前客户端已经开始从“一个员工对应一个项目空间”过渡到“两层模型”：
 
 1. 员工根目录
-   - 保存员工画像、当前激活项目、跨项目队列、成果索引
+   - 保存员工画像、`ROLE.md`、当前激活项目、跨项目队列、成果索引
 2. 项目工作空间
-   - 保存某个具体项目的 `current.md / plan.md / task_request.md / artifacts/`
+   - 保存某个具体项目的 `AGENTS.md / ROLE.md / current.md / plan.md / task_request.md / references/ / artifacts/`
 
 这样做的目标是：
 
 - 让不同项目上下文天然隔离
 - 让工作成果在员工层聚合展示
 - 为“当前项目完成后自动切到下一个项目”铺路
+- 让 Codex 在进入项目空间时自动加载长期规则
+- 让任务可附带文件、图片等参考资料
 
 ## 当前文档
 
@@ -106,6 +133,12 @@ npm run bridge
 
 - UI: `http://127.0.0.1:4273`
 - PTY bridge: `http://127.0.0.1:4281`
+
+首次启动建议：
+
+1. 先完成 Codex 配置和连通性测试
+2. 再创建第一个员工
+3. 最后发布第一条任务验证完整链路
 
 ## 容器运行
 

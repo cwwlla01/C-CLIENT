@@ -57,7 +57,7 @@ export function AgentRepoModal({
   }
 
   return (
-    <dialog open className="modal z-[60] bg-[#0F172A66] backdrop-blur-md">
+    <dialog open className="modal z-[130] bg-[#0F172A66] backdrop-blur-md">
       <div className="modal-box flex h-[78vh] max-h-[720px] max-w-[560px] flex-col overflow-hidden p-0">
         <div className="shrink-0 border-b border-base-300 px-5 pb-4 pt-5">
           <div className="flex items-start justify-between gap-4">

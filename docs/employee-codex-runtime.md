@@ -7,7 +7,8 @@
 真正的员工应该被定义为：
 
 - 一个独立项目空间
-- 一份固定的 `agent.md` 角色定义快照
+- 一份固定的 `ROLE.md` 角色定义快照
+- 一份项目空间级 `AGENTS.md` 长期规则
 - 一次被正确初始化的 Codex CLI 会话
 - 一套明确的文件更新约定
 
@@ -31,7 +32,8 @@
 
 1. 进入员工项目空间目录
 2. 确认以下文件存在：
-   - `agent.md`
+   - `AGENTS.md`
+   - `ROLE.md`
    - `workspace_guide.md`
    - `task_request.md`
    - `startup_ack.md`
@@ -43,8 +45,8 @@
    - `runtime/meta.json`
 3. 启动 Codex CLI
 4. 在初始化阶段向 Codex 明确注入：
-   - 员工身份来自 `agent.md`
-   - 项目空间工作规则来自 `workspace_guide.md`
+   - 员工身份来自 `ROLE.md`
+   - 长期工作规则来自 `AGENTS.md`
    - 原始需求优先从 `task_request.md` 读取
    - 恢复摘要从 `restore_summary.md` 补充
 
@@ -57,12 +59,14 @@
 建议结构：
 
 - 员工根目录
-  - `agent.md`
+  - `ROLE.md`
   - `employee.json`
   - `current-project.json`
   - `dispatch-queue.json`
   - `deliveries-index.json`
 - 项目工作空间
+  - `projects/<project>/AGENTS.md`
+  - `projects/<project>/ROLE.md`
   - `projects/<project>/current.md`
   - `projects/<project>/plan.md`
   - `projects/<project>/task_request.md`
@@ -85,7 +89,7 @@
 - 避免不同项目共用一个无限膨胀的工作空间
 - 让客户端后续能在员工层聚合展示“工作成果”和“待切换项目”
 
-### `agent.md`
+### `ROLE.md`
 
 员工角色定义快照。
 
@@ -94,6 +98,24 @@
 - 定义员工是谁
 - 定义能力边界、语气、职责
 - 为 Codex 会话提供稳定角色输入
+
+### `AGENTS.md`
+
+项目空间级长期规则文件。
+
+作用：
+
+- 让 Codex 在进入项目空间时自动加载工作规则
+- 约束任务文件和产出物应如何维护
+- 作为长期稳定规则，而不是当次任务说明
+
+模板来源：
+
+- `{项目路径}/setting/templates/AGENTS.md`
+
+初始化项目空间时，客户端会自动把模板复制到：
+
+- `{workspace}/AGENTS.md`
 
 ### `workspace_guide.md`
 
@@ -114,6 +136,16 @@
 - 保存外部投递给员工的原始需求
 - 作为员工生成 `plan.md` 的起点
 - 避免客户端越权替员工预写执行计划
+
+### `references/`
+
+任务附带的参考资料目录。
+
+作用：
+
+- 保存任务附带的图片、文档、代码片段等输入材料
+- 作为 `task_request.md` 的补充参考来源
+- 对新启动的 Codex 会话，图片资料可作为启动时的图片输入
 
 ### `startup_ack.md`
 
@@ -204,7 +236,8 @@
 当前客户端已经具备以下基础能力：
 
 - 创建员工项目空间
-- 写入 `agent.md`
+- 写入 `ROLE.md`
+- 初始化项目空间时复制 `AGENTS.md`
 - 写入 `plan.md`
 - 写入 `workspace_guide.md`
 - 写入 `task_request.md`
@@ -215,6 +248,7 @@
 - 启动、停止、重启本地 CLI 运行时
 - 当本机存在 `codex` 且项目空间文件齐备时，优先以 Codex CLI 方式启动员工会话
 - 在 `startup_ack.md` 处于待确认时，启动后会后台尝试执行一次轻量 Codex 首轮确认
+- 已通过真实 `codex exec` 验证项目空间内的 `AGENTS.md` 会生效
 
 当前仍未完全实现的部分：
 

@@ -21,9 +21,13 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { AddEmployeeModal } from "./components/add-employee-modal";
+import { OnboardingModal } from "./components/onboarding-modal";
 import { CompanyFilterDropdown } from "./components/company-filter-dropdown";
 import { PendingPromptsModal } from "./components/pending-prompts-modal";
-import { PublishTaskModal } from "./components/publish-task-modal";
+import {
+  PublishTaskModal,
+  type TaskReferenceAttachmentInput,
+} from "./components/publish-task-modal";
 import { RuntimeDetailModal } from "./components/runtime-detail-modal";
 import { RuntimeNode } from "./components/runtime-node";
 import { StatusGuideModal } from "./components/status-guide-modal";
@@ -33,6 +37,12 @@ import {
   type PromptRule,
 } from "./data/prompt-rules";
 import { daisyThemeOptions, type DaisyThemeName } from "./data/theme-options";
+import {
+  createDefaultCodexSettingsState,
+  type CodexAuthValues,
+  type CodexConfigValues,
+  type CodexSettingsState,
+} from "./data/codex-config";
 import {
   type AgentDefinition,
   createRuntimeMember,
@@ -56,10 +66,24 @@ const nodeTypes: NodeTypes = {
   runtimeNode: RuntimeNode,
 };
 
-const BRIDGE_PORT = 4281;
+const DEFAULT_BRIDGE_PORT = Number(import.meta.env.VITE_BRIDGE_PORT || "4281");
+const DEFAULT_WINDOW_HOST =
+  typeof window !== "undefined" ? window.location.hostname || "127.0.0.1" : "127.0.0.1";
+const DEFAULT_HTTP_PROTOCOL =
+  typeof window !== "undefined" && window.location.protocol === "https:"
+    ? "https"
+    : "http";
+const DEFAULT_WS_PROTOCOL = DEFAULT_HTTP_PROTOCOL === "https" ? "wss" : "ws";
+const BRIDGE_HOST = import.meta.env.VITE_BRIDGE_HOST || DEFAULT_WINDOW_HOST;
+const BRIDGE_HTTP_ORIGIN =
+  import.meta.env.VITE_BRIDGE_ORIGIN || `${DEFAULT_HTTP_PROTOCOL}://${BRIDGE_HOST}:${DEFAULT_BRIDGE_PORT}`;
+const BRIDGE_WS_ORIGIN =
+  import.meta.env.VITE_BRIDGE_WS_ORIGIN || `${DEFAULT_WS_PROTOCOL}://${BRIDGE_HOST}:${DEFAULT_BRIDGE_PORT}`;
 
 const SETTINGS_STORAGE_KEY = "cclient.settings.v1";
 const API_SECURITY_STORAGE_KEY = "cclient.api-security.v1";
+const ONBOARDING_DISMISSED_STORAGE_KEY = "cclient.onboarding.dismissed.v1";
+const ONBOARDING_TASK_PUBLISHED_STORAGE_KEY = "cclient.onboarding.task-published.v1";
 const TOAST_AUTO_CLOSE_MS = 3200;
 const RUNTIME_AUTO_REFRESH_MS = 4000;
 const CANVAS_LAYOUT_STORAGE_PREFIX = "cclient.canvas-layout.v1";
@@ -76,9 +100,9 @@ const defaultSettings: AppSettings = {
   defaultProjectStrategy: "snowflake32",
   defaultShell: "PowerShell 7.5",
   directTerminalOpen: false,
-  projectPath: "D:/PROJECT/COMPANY",
+  projectPath: import.meta.env.VITE_DEFAULT_PROJECT_PATH || "D:/PROJECT/COMPANY",
   terminalFontSize: 13,
-  theme: "light",
+  theme: "lemonade",
 };
 
 export type AgentRepoState = {
@@ -268,7 +292,59 @@ function buildBridgeHeaders(
 }
 
 function buildBridgeUrl(path: string) {
-  return `http://127.0.0.1:${BRIDGE_PORT}${path}`;
+  return `${BRIDGE_HTTP_ORIGIN}${path}`;
+}
+
+function buildBridgeDownloadUrl(
+  endpointPath: string,
+  params: Record<string, string | null | undefined>,
+  apiSecurity: Pick<ApiSecurityState, "apiKey" | "enabled">,
+) {
+  const url = new URL(`${BRIDGE_HTTP_ORIGIN}${endpointPath}`);
+
+  for (const [key, value] of Object.entries(params)) {
+    if (typeof value === "string" && value.trim()) {
+      url.searchParams.set(key, value);
+    }
+  }
+
+  if (apiSecurity.enabled && apiSecurity.apiKey.trim()) {
+    url.searchParams.set("token", apiSecurity.apiKey.trim());
+  }
+
+  return url.toString();
+}
+
+function loadStoredBoolean(key: string) {
+  try {
+    return window.localStorage.getItem(key) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCodexSettingsPayload(
+  payload: Partial<CodexSettingsState> & {
+    auth?: Partial<CodexAuthValues>;
+    config?: Partial<CodexConfigValues>;
+  },
+) {
+  const defaults = createDefaultCodexSettingsState();
+  return {
+    ...defaults,
+    ...payload,
+    auth: {
+      ...defaults.auth,
+      ...(payload.auth ?? {}),
+    },
+    config: {
+      ...defaults.config,
+      ...(payload.config ?? {}),
+    },
+    loading: false,
+    saving: false,
+    testing: false,
+  } satisfies CodexSettingsState;
 }
 
 function generateApiKeyValue() {
@@ -507,6 +583,8 @@ function App() {
   const [addEmployeeOpen, setAddEmployeeOpen] = useState(false);
   const [publishTaskOpen, setPublishTaskOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingChildFlow, setOnboardingChildFlow] = useState<null | "employee" | "task">(null);
   const [pendingPromptsOpen, setPendingPromptsOpen] = useState(false);
   const [statusGuideOpen, setStatusGuideOpen] = useState(false);
   const [hasWorkspaceScanCompleted, setHasWorkspaceScanCompleted] = useState(false);
@@ -548,6 +626,10 @@ function App() {
         }
       : loadApiSecurityState(),
   );
+  const [codexSettingsState, setCodexSettingsState] = useState<CodexSettingsState>(() => ({
+    ...createDefaultCodexSettingsState(),
+    loading: true,
+  }));
   const [agentRepoState, setAgentRepoState] = useState<AgentRepoState>({
     agents: [],
     cacheRoot: "",
@@ -567,6 +649,14 @@ function App() {
   });
   const [pendingPrompts, setPendingPrompts] = useState<PendingPrompt[]>([]);
   const [promptHandlingLogs, setPromptHandlingLogs] = useState<PromptHandlingLog[]>([]);
+  const [hasDismissedOnboarding, setHasDismissedOnboarding] = useState<boolean>(() =>
+    typeof window === "undefined" ? false : loadStoredBoolean(ONBOARDING_DISMISSED_STORAGE_KEY),
+  );
+  const [hasPublishedOnboardingTask, setHasPublishedOnboardingTask] = useState<boolean>(() =>
+    typeof window === "undefined"
+      ? false
+      : loadStoredBoolean(ONBOARDING_TASK_PUBLISHED_STORAGE_KEY),
+  );
   const apiSecurityRef = useRef(apiSecurity);
 
   useEffect(() => {
@@ -577,6 +667,15 @@ function App() {
     (includeJson = true) => buildBridgeHeaders(apiSecurityRef.current, includeJson),
     [],
   );
+
+  const triggerBrowserDownload = useCallback((downloadUrl: string) => {
+    const anchor = document.createElement("a");
+    anchor.href = downloadUrl;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }, []);
 
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings.theme);
@@ -593,6 +692,20 @@ function App() {
       }),
     );
   }, [apiSecurity.apiKey, apiSecurity.enabled, apiSecurity.filePath]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ONBOARDING_DISMISSED_STORAGE_KEY,
+      hasDismissedOnboarding ? "1" : "0",
+    );
+  }, [hasDismissedOnboarding]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      ONBOARDING_TASK_PUBLISHED_STORAGE_KEY,
+      hasPublishedOnboardingTask ? "1" : "0",
+    );
+  }, [hasPublishedOnboardingTask]);
 
   useEffect(() => {
     if (!hasWorkspaceScanCompleted) {
@@ -784,6 +897,48 @@ function App() {
     }
   }, [getBridgeHeaders, settings.projectPath]);
 
+  const loadCodexSettings = useCallback(async () => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      error: "",
+      loading: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/codex/load"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({}),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Codex 配置加载失败");
+      }
+
+      setCodexSettingsState((current) =>
+        normalizeCodexSettingsPayload({
+          ...current,
+          ...payload,
+          error: "",
+          testError: "",
+          testLatencyMs: null,
+          testMessage: "",
+          testModels: [],
+        }),
+      );
+    } catch (error) {
+      setCodexSettingsState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Codex 配置加载失败",
+        loading: false,
+      }));
+    }
+  }, [getBridgeHeaders]);
+
+  useEffect(() => {
+    void loadCodexSettings();
+  }, [loadCodexSettings]);
+
   useEffect(() => {
     if (!settingsOpen) {
       return;
@@ -791,7 +946,16 @@ function App() {
 
     void loadPromptRules();
     void loadApiSecurity();
-  }, [loadApiSecurity, loadPromptRules, settingsOpen]);
+    void loadCodexSettings();
+  }, [loadApiSecurity, loadCodexSettings, loadPromptRules, settingsOpen]);
+
+  useEffect(() => {
+    if (!onboardingOpen) {
+      return;
+    }
+
+    void loadCodexSettings();
+  }, [loadCodexSettings, onboardingOpen]);
 
   const refreshPendingPrompts = useCallback(async () => {
     try {
@@ -827,6 +991,75 @@ function App() {
       window.clearInterval(timer);
     };
   }, [refreshPendingPrompts]);
+
+  const hasEmployees = nodes.length > 0;
+  const hasPublishedTask = useMemo(
+    () =>
+      hasPublishedOnboardingTask ||
+      nodes.some((node) => {
+        const currentTask = node.data.currentTask?.trim() ?? "";
+        return (
+          node.data.taskIntakeStatus !== "none" ||
+          Boolean(node.data.recentCompleted) ||
+          Boolean(node.data.recentArtifact) ||
+          (Boolean(currentTask) &&
+            currentTask !== "等待任务分配" &&
+            currentTask !== "当前暂无任务" &&
+            currentTask !== "暂无")
+        );
+      }),
+    [hasPublishedOnboardingTask, nodes],
+  );
+  const needsOnboarding = useMemo(
+    () => !codexSettingsState.configured || !hasEmployees || !hasPublishedTask,
+    [codexSettingsState.configured, hasEmployees, hasPublishedTask],
+  );
+
+  useEffect(() => {
+    if (
+      hasDismissedOnboarding ||
+      codexSettingsState.loading ||
+      onboardingChildFlow ||
+      addEmployeeOpen ||
+      publishTaskOpen
+    ) {
+      return;
+    }
+
+    if (needsOnboarding) {
+      setOnboardingOpen(true);
+    }
+  }, [
+    addEmployeeOpen,
+    codexSettingsState.loading,
+    hasDismissedOnboarding,
+    needsOnboarding,
+    onboardingChildFlow,
+    publishTaskOpen,
+  ]);
+
+  useEffect(() => {
+    if (!onboardingChildFlow) {
+      return;
+    }
+
+    if (addEmployeeOpen || publishTaskOpen) {
+      return;
+    }
+
+    if (!hasDismissedOnboarding && !codexSettingsState.loading && needsOnboarding) {
+      setOnboardingOpen(true);
+    }
+
+    setOnboardingChildFlow(null);
+  }, [
+    addEmployeeOpen,
+    codexSettingsState.loading,
+    hasDismissedOnboarding,
+    needsOnboarding,
+    onboardingChildFlow,
+    publishTaskOpen,
+  ]);
 
   const agentRepoCacheRoot = useMemo(() => {
     const normalized = settings.projectPath.replace(/[\\/]+$/, "");
@@ -906,6 +1139,138 @@ function App() {
       settings.agentRepoUrl,
     ],
   );
+
+  const handleCodexConfigChange = useCallback((patch: Partial<CodexConfigValues>) => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      config: {
+        ...current.config,
+        ...patch,
+      },
+      configured: false,
+      error: "",
+      testError: "",
+      testLatencyMs: null,
+      testMessage: "",
+      testModels: [],
+    }));
+  }, []);
+
+  const handleCodexAuthChange = useCallback((patch: Partial<CodexAuthValues>) => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      auth: {
+        ...current.auth,
+        ...patch,
+      },
+      configured: false,
+      error: "",
+      testError: "",
+      testLatencyMs: null,
+      testMessage: "",
+      testModels: [],
+    }));
+  }, []);
+
+  const handleCodexConfigTomlChange = useCallback((next: string) => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      configToml: next,
+      configured: false,
+      error: "",
+      testError: "",
+      testLatencyMs: null,
+      testMessage: "",
+      testModels: [],
+    }));
+  }, []);
+
+  const handleSaveCodexSettings = useCallback(async () => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      error: "",
+      saving: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/codex/save"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          auth: codexSettingsState.auth,
+          config: codexSettingsState.config,
+          configToml: codexSettingsState.configToml,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Codex 配置保存失败");
+      }
+
+      setCodexSettingsState(
+        normalizeCodexSettingsPayload({
+          ...payload,
+          error: "",
+          testError: "",
+          testLatencyMs: null,
+          testMessage: "",
+          testModels: [],
+        }),
+      );
+      setWorkspaceMessage("Codex 配置已保存");
+    } catch (error) {
+      setCodexSettingsState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "Codex 配置保存失败",
+        saving: false,
+      }));
+      setWorkspaceError(error instanceof Error ? error.message : "Codex 配置保存失败");
+    }
+  }, [codexSettingsState.auth, codexSettingsState.config, codexSettingsState.configToml, getBridgeHeaders]);
+
+  const handleTestCodexSettings = useCallback(async () => {
+    setCodexSettingsState((current) => ({
+      ...current,
+      testError: "",
+      testLatencyMs: null,
+      testMessage: "",
+      testModels: [],
+      testing: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/codex/test"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          auth: codexSettingsState.auth,
+          config: codexSettingsState.config,
+          configToml: codexSettingsState.configToml,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Codex 连通性测试失败");
+      }
+
+      setCodexSettingsState((current) => ({
+        ...current,
+        testError: "",
+        testLatencyMs: typeof payload.latencyMs === "number" ? payload.latencyMs : null,
+        testMessage: payload.message ?? "连接成功",
+        testModels: Array.isArray(payload.models) ? payload.models : [],
+        testing: false,
+      }));
+      setWorkspaceMessage("Codex 连通性测试成功");
+    } catch (error) {
+      setCodexSettingsState((current) => ({
+        ...current,
+        testError: error instanceof Error ? error.message : "Codex 连通性测试失败",
+        testing: false,
+      }));
+      setWorkspaceError(error instanceof Error ? error.message : "Codex 连通性测试失败");
+    }
+  }, [codexSettingsState.auth, codexSettingsState.config, codexSettingsState.configToml, getBridgeHeaders]);
 
   const findMemberById = useCallback(
     (memberId: string | null) =>
@@ -1197,6 +1562,54 @@ function App() {
     [findMemberById, updateMember],
   );
 
+  const handleDeleteEmployee = useCallback(
+    async (memberId: string) => {
+      const member = findMemberById(memberId);
+      if (!member) {
+        setWorkspaceError("未找到目标员工");
+        return false;
+      }
+
+      setWorkspaceError("");
+      try {
+        const response = await fetch(buildBridgeUrl("/api/employee/delete"), {
+          method: "POST",
+          headers: getBridgeHeaders(),
+          body: JSON.stringify({
+            workspacePath: member.workspace,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "辞退员工失败");
+        }
+
+        setNodes((current) => current.filter((node) => node.id !== memberId));
+        setRestartingMemberIds((current) => current.filter((id) => id !== memberId));
+        if (detailMemberId === memberId) {
+          setDetailMemberId(null);
+        }
+        if (terminalMemberId === memberId) {
+          setTerminalMemberId(null);
+        }
+
+        await refreshWorkspaceNodes({ silent: true });
+        setWorkspaceMessage(`已辞退员工：${payload.employeeName ?? member.name}`);
+        return true;
+      } catch (error) {
+        setWorkspaceError(error instanceof Error ? error.message : "辞退员工失败");
+        return false;
+      }
+    },
+    [
+      detailMemberId,
+      findMemberById,
+      refreshWorkspaceNodes,
+      terminalMemberId,
+      setNodes,
+    ],
+  );
+
   const handleRestartRuntime = useCallback(
     async (memberId: string, workspaceOverride?: string) => {
       const member = findMemberById(memberId);
@@ -1354,6 +1767,7 @@ function App() {
 
   const handlePublishTask = useCallback(
     async ({
+      attachments,
       company,
       deadlineAt,
       department,
@@ -1364,6 +1778,7 @@ function App() {
       taskDescription,
       timeWindow,
     }: {
+      attachments: TaskReferenceAttachmentInput[];
       company: string;
       deadlineAt: string;
       department: string;
@@ -1386,6 +1801,7 @@ function App() {
           method: "POST",
           headers: getBridgeHeaders(),
           body: JSON.stringify({
+            attachments,
             company,
             deadlineAt,
             department,
@@ -1473,6 +1889,7 @@ function App() {
         }
 
         setPublishTaskOpen(false);
+        setHasPublishedOnboardingTask(true);
         setWorkspaceMessage(
           payload.mode === "queued_project"
             ? `任务已写入 ${projectName}，等待 ${member.name} 完成当前项目后切换`
@@ -1575,6 +1992,22 @@ function App() {
       .catch(() => setWorkspaceError(`复制${label}失败`));
   }, []);
 
+  const requestOpenLocalPath = useCallback(
+    async (targetPath: string) => {
+      const response = await fetch(buildBridgeUrl("/api/path/open"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({ path: targetPath }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "打开路径失败");
+      }
+      return payload;
+    },
+    [],
+  );
+
   const handleOpenWorkspace = useCallback(
     async (memberId: string) => {
       const member = findMemberById(memberId);
@@ -1583,41 +2016,77 @@ function App() {
       }
 
       try {
-        const response = await fetch(buildBridgeUrl("/api/path/open"), {
-          method: "POST",
-          headers: getBridgeHeaders(),
-          body: JSON.stringify({ path: member.workspace }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || "打开工作空间失败");
-        }
+        await requestOpenLocalPath(member.workspace);
         setWorkspaceMessage(`已打开工作空间：${member.workspace}`);
       } catch (error) {
         setWorkspaceError(error instanceof Error ? error.message : "打开工作空间失败");
       }
     },
-    [findMemberById],
+    [findMemberById, requestOpenLocalPath],
   );
 
   const handleOpenPath = useCallback(
     async (targetPath: string, label: string) => {
       try {
-        const response = await fetch(buildBridgeUrl("/api/path/open"), {
-          method: "POST",
-          headers: getBridgeHeaders(),
-          body: JSON.stringify({ path: targetPath }),
-        });
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || `打开 ${label} 失败`);
-        }
+        await requestOpenLocalPath(targetPath);
         setWorkspaceMessage(`已打开 ${label}：${targetPath}`);
       } catch (error) {
         setWorkspaceError(error instanceof Error ? error.message : `打开 ${label} 失败`);
       }
     },
-    [],
+    [requestOpenLocalPath],
+  );
+
+  const handleDownloadHistoryFile = useCallback(
+    (filePath: string, workspacePath?: string | null) => {
+      const downloadUrl = buildBridgeDownloadUrl(
+        "/api/download/file",
+        {
+          path: filePath,
+          workspacePath: workspacePath ?? undefined,
+        },
+        apiSecurityRef.current,
+      );
+
+      triggerBrowserDownload(downloadUrl);
+      setWorkspaceMessage(`开始下载：${filePath.split("/").pop() ?? "交付物文件"}`);
+    },
+    [triggerBrowserDownload],
+  );
+
+  const handleDownloadProjectHistoryBundle = useCallback(
+    (workspacePath: string, projectName: string) => {
+      const downloadUrl = buildBridgeDownloadUrl(
+        "/api/download/archive",
+        {
+          scope: "project",
+          workspacePath,
+        },
+        apiSecurityRef.current,
+      );
+
+      triggerBrowserDownload(downloadUrl);
+      setWorkspaceMessage(`开始下载项目成果包：${projectName}`);
+    },
+    [triggerBrowserDownload],
+  );
+
+  const handleDownloadEmployeeHistoryBundle = useCallback(
+    (workspacePath: string) => {
+      const member = findMemberById(detailMemberId);
+      const downloadUrl = buildBridgeDownloadUrl(
+        "/api/download/archive",
+        {
+          scope: "employee",
+          workspacePath,
+        },
+        apiSecurityRef.current,
+      );
+
+      triggerBrowserDownload(downloadUrl);
+      setWorkspaceMessage(`开始下载全部成果包：${member?.name ?? "当前员工"}`);
+    },
+    [detailMemberId, findMemberById, triggerBrowserDownload],
   );
 
   const handleOpenWorkspaceFile = useCallback(
@@ -1637,11 +2106,65 @@ function App() {
     [findMemberById, handleOpenPath],
   );
 
-  const handleOpenAgentFile = useCallback(
+  const handleOpenWorkspaceFileCandidates = useCallback(
     async (memberId: string) => {
-      void handleOpenWorkspaceFile(memberId, "agent.md", "agent.md");
+      const member = findMemberById(memberId);
+      if (!member) {
+        return;
+      }
+
+      const candidates = [
+        { filename: "ROLE.md", label: "ROLE.md" },
+        { filename: "agent.md", label: "agent.md" },
+      ];
+
+      for (const candidate of candidates) {
+        try {
+          await requestOpenLocalPath(`${member.workspace}/${candidate.filename}`);
+          setWorkspaceMessage(`已打开 ${candidate.label}：${member.workspace}/${candidate.filename}`);
+          return;
+        } catch {
+          // try next candidate
+        }
+      }
+
+      setWorkspaceError("打开 ROLE.md 失败");
     },
-    [handleOpenWorkspaceFile],
+    [findMemberById, requestOpenLocalPath],
+  );
+
+  const handleOpenRoleFile = useCallback(
+    async (memberId: string) => {
+      void handleOpenWorkspaceFileCandidates(memberId);
+    },
+    [handleOpenWorkspaceFileCandidates],
+  );
+
+  const handleOpenWorkspaceRulesFile = useCallback(
+    async (memberId: string) => {
+      const member = findMemberById(memberId);
+      if (!member) {
+        return;
+      }
+
+      const candidates = [
+        { filename: "AGENTS.md", label: "AGENTS.md" },
+        { filename: "workspace_guide.md", label: "workspace_guide.md" },
+      ];
+
+      for (const candidate of candidates) {
+        try {
+          await requestOpenLocalPath(`${member.workspace}/${candidate.filename}`);
+          setWorkspaceMessage(`已打开 ${candidate.label}：${member.workspace}/${candidate.filename}`);
+          return;
+        } catch {
+          // try next candidate
+        }
+      }
+
+      setWorkspaceError("打开 AGENTS.md 失败");
+    },
+    [findMemberById, requestOpenLocalPath],
   );
 
   const handleUpdateMemberSettings = useCallback(
@@ -2062,15 +2585,6 @@ function App() {
             </div>
           </div>
 
-          <div className="badge badge-success badge-outline gap-2 px-3 py-3 font-medium">
-            <span className="status status-success"></span>
-            服务端连接正常
-          </div>
-
-          <div className="badge badge-warning badge-outline gap-2 px-3 py-3 font-semibold">
-            当前模式：Supervisor Mock
-          </div>
-
           <div className="ml-auto flex items-center gap-3">
             <CompanyFilterDropdown
               companies={companyOptions}
@@ -2127,6 +2641,17 @@ function App() {
                 </svg>
               </button>
               <ul className="menu dropdown-content z-[80] mt-2 w-64 rounded-box border border-base-300 bg-base-100 p-2 shadow-lg">
+                <li>
+                  <button
+                    onClick={() => {
+                      setOnboardingOpen(true);
+                      void loadCodexSettings();
+                    }}
+                    type="button"
+                  >
+                    首次引导
+                  </button>
+                </li>
                 <li>
                   <button onClick={() => setSettingsOpen(true)} type="button">
                     打开设置
@@ -2318,7 +2843,10 @@ function App() {
         onRestartRuntime={handleRestartRuntime}
         member={detailMember}
         onClose={() => setDetailMemberId(null)}
-        onOpenAgentFile={handleOpenAgentFile}
+        onDownloadEmployeeHistoryBundle={handleDownloadEmployeeHistoryBundle}
+        onDownloadHistoryFile={handleDownloadHistoryFile}
+        onDownloadProjectHistoryBundle={handleDownloadProjectHistoryBundle}
+        onOpenRoleFile={handleOpenRoleFile}
         onOpenPlanFile={(memberId) => {
           void handleOpenWorkspaceFile(memberId, "plan.md", "plan.md");
         }}
@@ -2331,8 +2859,8 @@ function App() {
         onOpenTaskRequestFile={(memberId) => {
           void handleOpenWorkspaceFile(memberId, "task_request.md", "task_request.md");
         }}
-        onOpenWorkspaceGuideFile={(memberId) => {
-          void handleOpenWorkspaceFile(memberId, "workspace_guide.md", "workspace_guide.md");
+        onOpenWorkspaceRulesFile={(memberId) => {
+          void handleOpenWorkspaceRulesFile(memberId);
         }}
         onCopySessionId={(memberId) => {
           const member = findMemberById(memberId);
@@ -2359,6 +2887,7 @@ function App() {
         onOpenWorkspace={handleOpenWorkspace}
         onSwitchProjectSpace={handleSwitchProjectSpace}
         onRetryStartupAck={handleRetryStartupAck}
+        onDeleteEmployee={handleDeleteEmployee}
         onStopRuntime={handleStopRuntime}
         onUpdateMemberSettings={handleUpdateMemberSettings}
       />
@@ -2403,7 +2932,7 @@ function App() {
         <TerminalWindow
           apiKey={apiSecurity.apiKey}
           apiKeyEnabled={apiSecurity.enabled}
-          bridgePort={BRIDGE_PORT}
+          bridgeWsOrigin={BRIDGE_WS_ORIGIN}
           member={terminalMember}
           onClose={() => setTerminalMemberId(null)}
           terminalFontSize={settings.terminalFontSize}
@@ -2436,17 +2965,51 @@ function App() {
         preferredCompany={selectedCompany === "all" ? undefined : selectedCompany}
       />
 
+      <OnboardingModal
+        codexState={codexSettingsState}
+        hasEmployees={hasEmployees}
+        hasPublishedTask={hasPublishedTask}
+        onChangeAuth={handleCodexAuthChange}
+        onChangeConfig={handleCodexConfigChange}
+        onChangeConfigToml={handleCodexConfigTomlChange}
+        onClose={() => {
+          setOnboardingOpen(false);
+          setHasDismissedOnboarding(true);
+        }}
+        onFinish={() => {
+          setOnboardingOpen(false);
+          setHasDismissedOnboarding(true);
+        }}
+        onOpenAddEmployee={() => {
+          setOnboardingChildFlow("employee");
+          setAddEmployeeOpen(true);
+        }}
+        onOpenPublishTask={() => {
+          setOnboardingChildFlow("task");
+          setPublishTaskOpen(true);
+        }}
+        onSaveCodex={handleSaveCodexSettings}
+        onTestCodex={handleTestCodexSettings}
+        open={onboardingOpen}
+      />
+
       <SettingsModal
         apiSecurityState={apiSecurity}
+        codexSettingsState={codexSettingsState}
         onApiSecurityChange={handleApiSecurityChange}
         onAddPromptRule={handleAddPromptRule}
+        onCodexAuthChange={handleCodexAuthChange}
+        onCodexConfigChange={handleCodexConfigChange}
+        onCodexConfigTomlChange={handleCodexConfigTomlChange}
         onClose={() => setSettingsOpen(false)}
         onDeletePromptRule={handleDeletePromptRule}
         onGenerateApiKey={handleGenerateApiKey}
         onPromptRuleChange={handlePromptRuleChange}
         onSave={setSettings}
         onSaveApiSecurity={handleSaveApiSecurity}
+        onSaveCodexSettings={handleSaveCodexSettings}
         onSavePromptRules={handleSavePromptRules}
+        onTestCodexSettings={handleTestCodexSettings}
         onSyncRepo={() => void syncAgentRepo(true)}
         open={settingsOpen}
         promptRulesState={promptRulesState}

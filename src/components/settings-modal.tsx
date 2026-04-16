@@ -1,12 +1,18 @@
 import { useEffect, useState } from "react";
+import { CodexSettingsPanel } from "./codex-settings-panel";
 import type { DaisyThemeName } from "../data/theme-options";
 import { daisyThemeOptions } from "../data/theme-options";
+import type {
+  CodexAuthValues,
+  CodexConfigValues,
+  CodexSettingsState,
+} from "../data/codex-config";
 import {
   promptRuleActionOptions,
   type PromptRule,
 } from "../data/prompt-rules";
 
-type SettingsTab = "system" | "theme" | "rules";
+type SettingsTab = "system" | "codex" | "theme" | "rules";
 
 export type AppSettings = {
   agentRepoUrl: string;
@@ -34,15 +40,21 @@ type SettingsModalProps = {
     apiKey?: string;
     enabled?: boolean;
   }) => void;
+  onCodexAuthChange: (patch: Partial<CodexAuthValues>) => void;
+  onCodexConfigChange: (patch: Partial<CodexConfigValues>) => void;
+  onCodexConfigTomlChange: (next: string) => void;
   onGenerateApiKey: () => void;
   onSaveApiSecurity: () => void;
+  onSaveCodexSettings: () => void;
   onClose: () => void;
   onAddPromptRule: () => void;
   onDeletePromptRule: (ruleId: string) => void;
   onPromptRuleChange: (ruleId: string, patch: Partial<PromptRule>) => void;
   onSave: (next: AppSettings) => void;
   onSavePromptRules: () => void;
+  onTestCodexSettings: () => void;
   onSyncRepo: () => void;
+  codexSettingsState: CodexSettingsState;
   open: boolean;
   promptRulesState: {
     error: string;
@@ -64,15 +76,21 @@ type SettingsModalProps = {
 
 export function SettingsModal({
   apiSecurityState,
+  codexSettingsState,
   onApiSecurityChange,
+  onCodexAuthChange,
+  onCodexConfigChange,
+  onCodexConfigTomlChange,
   onGenerateApiKey,
   onSaveApiSecurity,
+  onSaveCodexSettings,
   onClose,
   onAddPromptRule,
   onDeletePromptRule,
   onPromptRuleChange,
   onSave,
   onSavePromptRules,
+  onTestCodexSettings,
   onSyncRepo,
   open,
   promptRulesState,
@@ -116,6 +134,13 @@ export function SettingsModal({
               type="button"
             >
               系统配置
+            </button>
+            <button
+              className={`tab ${activeTab === "codex" ? "tab-active" : ""}`}
+              onClick={() => setActiveTab("codex")}
+              type="button"
+            >
+              Codex 配置
             </button>
             <button
               className={`tab ${activeTab === "theme" ? "tab-active" : ""}`}
@@ -407,6 +432,17 @@ export function SettingsModal({
                   </div>
                 </div>
               </div>
+            ) : null}
+
+            {activeTab === "codex" ? (
+              <CodexSettingsPanel
+                onChangeAuth={onCodexAuthChange}
+                onChangeConfig={onCodexConfigChange}
+                onChangeConfigToml={onCodexConfigTomlChange}
+                onSave={onSaveCodexSettings}
+                onTest={onTestCodexSettings}
+                state={codexSettingsState}
+              />
             ) : null}
 
             {activeTab === "theme" ? (
