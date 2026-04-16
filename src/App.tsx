@@ -43,6 +43,7 @@ import {
   type CodexConfigValues,
   type CodexSettingsState,
 } from "./data/codex-config";
+import { runtimePublicConfig } from "./data/runtime-config";
 import {
   type AgentDefinition,
   createRuntimeMember,
@@ -66,19 +67,8 @@ const nodeTypes: NodeTypes = {
   runtimeNode: RuntimeNode,
 };
 
-const DEFAULT_BRIDGE_PORT = Number(import.meta.env.VITE_BRIDGE_PORT || "4281");
-const DEFAULT_WINDOW_HOST =
-  typeof window !== "undefined" ? window.location.hostname || "127.0.0.1" : "127.0.0.1";
-const DEFAULT_HTTP_PROTOCOL =
-  typeof window !== "undefined" && window.location.protocol === "https:"
-    ? "https"
-    : "http";
-const DEFAULT_WS_PROTOCOL = DEFAULT_HTTP_PROTOCOL === "https" ? "wss" : "ws";
-const BRIDGE_HOST = import.meta.env.VITE_BRIDGE_HOST || DEFAULT_WINDOW_HOST;
-const BRIDGE_HTTP_ORIGIN =
-  import.meta.env.VITE_BRIDGE_ORIGIN || `${DEFAULT_HTTP_PROTOCOL}://${BRIDGE_HOST}:${DEFAULT_BRIDGE_PORT}`;
-const BRIDGE_WS_ORIGIN =
-  import.meta.env.VITE_BRIDGE_WS_ORIGIN || `${DEFAULT_WS_PROTOCOL}://${BRIDGE_HOST}:${DEFAULT_BRIDGE_PORT}`;
+const BRIDGE_HTTP_ORIGIN = runtimePublicConfig.bridgeHttpOrigin;
+const BRIDGE_WS_ORIGIN = runtimePublicConfig.bridgeWsOrigin;
 
 const SETTINGS_STORAGE_KEY = "cclient.settings.v1";
 const API_SECURITY_STORAGE_KEY = "cclient.api-security.v1";
@@ -100,7 +90,7 @@ const defaultSettings: AppSettings = {
   defaultProjectStrategy: "snowflake32",
   defaultShell: "PowerShell 7.5",
   directTerminalOpen: false,
-  projectPath: import.meta.env.VITE_DEFAULT_PROJECT_PATH || "D:/PROJECT/COMPANY",
+  projectPath: runtimePublicConfig.defaultProjectPath,
   terminalFontSize: 13,
   theme: "lemonade",
 };

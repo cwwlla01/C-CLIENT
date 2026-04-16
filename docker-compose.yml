@@ -4,13 +4,13 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        VITE_BRIDGE_HOST: 127.0.0.1
         VITE_BRIDGE_PORT: 4281
         VITE_DEFAULT_PROJECT_PATH: /workspace/company
     container_name: c-client
     environment:
       CCLIENT_BRIDGE_HOST: 0.0.0.0
       CCLIENT_BRIDGE_PORT: 4281
+      CCLIENT_PUBLIC_DEFAULT_PROJECT_PATH: /workspace/company
       UI_PORT: 4273
     ports:
       - "4273:4273"
@@ -18,5 +18,5 @@ services:
     volumes:
       - ./runtime-data/company:/workspace/company
       - ./runtime-data/settings:/workspace/settings
-      - ${USERPROFILE}/.codex:/root/.codex
+      - ${CODEX_HOME_HOST:-./runtime-data/codex-home}:/root/.codex
     restart: unless-stopped

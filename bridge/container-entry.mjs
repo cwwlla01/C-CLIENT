@@ -9,6 +9,10 @@ const UI_HOST = process.env.UI_HOST || "0.0.0.0";
 const UI_PORT = Number(process.env.UI_PORT || 4273);
 const DIST_DIR = path.join(process.cwd(), "dist");
 const INDEX_FILE = path.join(DIST_DIR, "index.html");
+const DEFAULT_PROJECT_PATH =
+  process.env.CCLIENT_PUBLIC_DEFAULT_PROJECT_PATH ||
+  process.env.VITE_DEFAULT_PROJECT_PATH ||
+  "/workspace/company";
 
 const MIME_TYPES = new Map([
   [".css", "text/css; charset=utf-8"],
@@ -35,6 +39,34 @@ const bridgeProcess = spawn(process.execPath, ["./bridge/server.mjs"], {
 });
 
 let shuttingDown = false;
+
+function readRuntimePublicConfig() {
+  return {
+    bridgeHost: String(process.env.CCLIENT_PUBLIC_BRIDGE_HOST || "").trim(),
+    bridgeHttpOrigin: String(process.env.CCLIENT_PUBLIC_BRIDGE_ORIGIN || "").trim(),
+    bridgePort: String(process.env.CCLIENT_PUBLIC_BRIDGE_PORT || "").trim(),
+    bridgeWsOrigin: String(process.env.CCLIENT_PUBLIC_BRIDGE_WS_ORIGIN || "").trim(),
+    defaultProjectPath: String(DEFAULT_PROJECT_PATH || "").trim(),
+  };
+}
+
+function buildRuntimeConfigScript() {
+  const config = readRuntimePublicConfig();
+  return `(() => {
+  const runtime = ${JSON.stringify(config)};
+  const protocol = window.location.protocol === "https:" ? "https" : "http";
+  const wsProtocol = protocol === "https" ? "wss" : "ws";
+  const host = runtime.bridgeHost || window.location.hostname || "127.0.0.1";
+  const port = Number(runtime.bridgePort) > 0 ? Number(runtime.bridgePort) : 4281;
+  window.__CCLIENT_RUNTIME_CONFIG__ = {
+    bridgeHost: host,
+    bridgeHttpOrigin: runtime.bridgeHttpOrigin || \`\${protocol}://\${host}:\${port}\`,
+    bridgePort: port,
+    bridgeWsOrigin: runtime.bridgeWsOrigin || \`\${wsProtocol}://\${host}:\${port}\`,
+    defaultProjectPath: runtime.defaultProjectPath || "",
+  };
+})();`;
+}
 
 function resolveRequestPath(urlPathname) {
   const decodedPath = decodeURIComponent(urlPathname);
@@ -88,6 +120,15 @@ const uiServer = http.createServer(async (request, response) => {
 
   try {
     const { pathname } = new URL(request.url, `http://${request.headers.host || "localhost"}`);
+    if (pathname === "/runtime-config.js") {
+      response.writeHead(200, {
+        "Cache-Control": "no-cache",
+        "Content-Type": "text/javascript; charset=utf-8",
+      });
+      response.end(buildRuntimeConfigScript());
+      return;
+    }
+
     const asset = await resolveStaticAsset(pathname);
 
     if (!asset.filePath) {

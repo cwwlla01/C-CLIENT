@@ -148,3 +148,10 @@ npm run bridge
 - `.dockerignore`
 - `docker-compose.yml`
 - [Docker / Podman 运行说明](./docs/docker-podman.md)
+
+当前容器部署已支持运行时前端配置：
+
+- bridge 地址可以在 `docker run` / `docker compose` 启动时通过环境变量覆盖
+- 不再要求为了改 bridge 地址重新构建镜像
+- 具体配置项与含义见：
+  - [Docker / Podman 运行说明](./docs/docker-podman.md)
