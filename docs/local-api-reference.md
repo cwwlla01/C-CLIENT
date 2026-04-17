@@ -71,6 +71,38 @@
 
 ## 3. 工作空间接口
 
+### `GET /api/settings/root`
+
+作用：
+
+- 获取当前项目的 `setting` 根目录
+- 同时返回常用配置文件和缓存目录路径
+
+说明：
+
+- 无需请求体
+- 接口会按以下优先级自动推断项目根目录：
+  1. 当前活跃的 `activeSecurityConfig.projectRoot`
+  2. `CCLIENT_PUBLIC_DEFAULT_PROJECT_PATH`
+  3. `VITE_DEFAULT_PROJECT_PATH`
+  4. 当前 bridge 进程工作目录 `process.cwd()`
+
+响应：
+
+```json
+{
+  "projectRoot": "D:/PROJECT/COMPANY",
+  "projectRootExists": true,
+  "settingsRoot": "D:/PROJECT/COMPANY/setting",
+  "settingsRootExists": true,
+  "templatesRoot": "D:/PROJECT/COMPANY/setting/templates",
+  "templatesRootExists": true,
+  "securityFilePath": "D:/PROJECT/COMPANY/setting/security.json",
+  "promptRulesFilePath": "D:/PROJECT/COMPANY/setting/prompt-rules.json",
+  "agentRepoCacheRoot": "D:/PROJECT/COMPANY/setting/agent-repo"
+}
+```
+
 ### `POST /api/settings/security/load`
 
 作用：

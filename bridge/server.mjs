@@ -63,6 +63,10 @@ function securityFilePath(projectRoot) {
   return path.join(projectRoot, "setting", "security.json");
 }
 
+function settingsRootPath(projectRoot) {
+  return path.join(projectRoot, "setting");
+}
+
 function deriveProjectRootFromCacheRoot(cacheRoot) {
   const normalized = String(cacheRoot || "").replace(/[\\/]+$/, "");
   if (!normalized) {
@@ -70,6 +74,46 @@ function deriveProjectRootFromCacheRoot(cacheRoot) {
   }
 
   return path.dirname(path.dirname(normalized));
+}
+
+function resolveProjectRootFromPayload(payload) {
+  return (
+    String(payload?.projectRoot || "").trim() ||
+    (payload?.workspacePath ? deriveProjectRootFromWorkspace(payload.workspacePath) : "") ||
+    (payload?.cwd ? deriveProjectRootFromWorkspace(payload.cwd) : "") ||
+    (payload?.cacheRoot ? deriveProjectRootFromCacheRoot(payload.cacheRoot) : "") ||
+    activeSecurityConfig.projectRoot
+  );
+}
+
+function getSettingsRootState(payload) {
+  const fallbackRoot =
+    activeSecurityConfig.projectRoot ||
+    String(process.env.CCLIENT_PUBLIC_DEFAULT_PROJECT_PATH || "").trim() ||
+    String(process.env.VITE_DEFAULT_PROJECT_PATH || "").trim() ||
+    process.cwd();
+  const normalizedRoot = String(resolveProjectRootFromPayload(payload) || fallbackRoot).replace(/[\\/]+$/, "");
+  if (!normalizedRoot) {
+    throw new Error("projectRoot is unavailable");
+  }
+
+  const settingsRoot = settingsRootPath(normalizedRoot);
+  const templatesRoot = path.join(settingsRoot, "templates");
+  const promptRulesPath = promptRulesFilePath(normalizedRoot);
+  const securityPath = securityFilePath(normalizedRoot);
+  const agentRepoCacheRoot = path.join(settingsRoot, "agent-repo");
+
+  return {
+    agentRepoCacheRoot: agentRepoCacheRoot.replace(/\\/g, "/"),
+    projectRoot: normalizedRoot.replace(/\\/g, "/"),
+    projectRootExists: existsSync(normalizedRoot),
+    promptRulesFilePath: promptRulesPath.replace(/\\/g, "/"),
+    securityFilePath: securityPath.replace(/\\/g, "/"),
+    settingsRoot: settingsRoot.replace(/\\/g, "/"),
+    settingsRootExists: existsSync(settingsRoot),
+    templatesRoot: templatesRoot.replace(/\\/g, "/"),
+    templatesRootExists: existsSync(templatesRoot),
+  };
 }
 
 async function loadSecurityConfig(projectRoot) {
@@ -128,12 +172,7 @@ async function saveSecurityConfig(projectRoot, payload, providedKey) {
 }
 
 async function resolveSecurityConfigForPayload(payload) {
-  const projectRoot =
-    String(payload?.projectRoot || "").trim() ||
-    (payload?.workspacePath ? deriveProjectRootFromWorkspace(payload.workspacePath) : "") ||
-    (payload?.cwd ? deriveProjectRootFromWorkspace(payload.cwd) : "") ||
-    (payload?.cacheRoot ? deriveProjectRootFromCacheRoot(payload.cacheRoot) : "") ||
-    activeSecurityConfig.projectRoot;
+  const projectRoot = resolveProjectRootFromPayload(payload);
 
   return loadSecurityConfig(projectRoot);
 }
@@ -4283,6 +4322,18 @@ const server = http.createServer((request, response) => {
       bridgePort: BRIDGE_PORT,
       sessionCount: sessions.size,
     });
+    return;
+  }
+
+  if (request.method === "GET" && url.pathname === "/api/settings/root") {
+    try {
+      const result = getSettingsRootState({});
+      writeJson(response, 200, result);
+    } catch (error) {
+      writeJson(response, 400, {
+        error: error instanceof Error ? error.message : "settings root resolve failed",
+      });
+    }
     return;
   }
 
