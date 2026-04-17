@@ -567,8 +567,7 @@
   "projectName": "prj-xxxx",
   "taskDescription": "整理 Java 的版本特性",
   "priority": "P1",
-  "timeWindow": "today",
-  "deadlineAt": "",
+  "timeWindow": "within_3h",
   "source": "手动发布",
   "forceCurrent": false,
   "attachments": [
@@ -582,6 +581,20 @@
   ]
 }
 ```
+
+`timeWindow` 当前建议值：
+
+- `within_30m`
+- `within_1h`
+- `within_3h`
+- `within_12h`
+- `within_24h`
+- `no_deadline`
+
+说明：
+
+- 客户端 / 服务端会根据该值自动换算绝对 `deadlineAt`
+- `no_deadline` 时不会写入具体截止时间
 
 响应关键字段：
 

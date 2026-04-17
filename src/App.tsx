@@ -1759,7 +1759,6 @@ function App() {
     async ({
       attachments,
       company,
-      deadlineAt,
       department,
       memberId,
       projectName,
@@ -1770,14 +1769,19 @@ function App() {
     }: {
       attachments: TaskReferenceAttachmentInput[];
       company: string;
-      deadlineAt: string;
       department: string;
       memberId: string;
       projectName: string;
       priority: "P0" | "P1" | "P2" | "P3";
       source: string;
       taskDescription: string;
-      timeWindow: "immediate" | "today" | "this_week" | "no_deadline";
+      timeWindow:
+        | "within_30m"
+        | "within_1h"
+        | "within_3h"
+        | "within_12h"
+        | "within_24h"
+        | "no_deadline";
     }) => {
       const member = findMemberById(memberId);
       if (!member) {
@@ -1793,7 +1797,6 @@ function App() {
           body: JSON.stringify({
             attachments,
             company,
-            deadlineAt,
             department,
             employeeName: member.name,
             forceCurrent: member.runtimeStatus !== "running",
@@ -1840,7 +1843,7 @@ function App() {
               payload.mode === "project_switch" && payload.projectName
                 ? payload.projectName
                 : current.projectName,
-            taskDeadline: deadlineAt || null,
+            taskDeadline: payload.deadlineAt || null,
             taskIntakeStatus: "pending_ack",
             taskPriority: priority,
             taskSource: source,

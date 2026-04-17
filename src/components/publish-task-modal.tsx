@@ -25,8 +25,7 @@ type PublishTaskModalProps = {
     priority: "P0" | "P1" | "P2" | "P3";
     source: string;
     taskDescription: string;
-    timeWindow: "immediate" | "today" | "this_week" | "no_deadline";
-    deadlineAt: string;
+    timeWindow: RelativeTimeWindow;
   }) => void;
   defaultProjectStrategy: ProjectNamingStrategy;
   open: boolean;
@@ -48,10 +47,55 @@ type TaskReferenceDraft = TaskReferenceAttachmentInput & {
 };
 
 type PublishTaskTab = "task" | "employee";
+type RelativeTimeWindow =
+  | "within_30m"
+  | "within_1h"
+  | "within_3h"
+  | "within_12h"
+  | "within_24h"
+  | "no_deadline";
 
 const MAX_REFERENCE_COUNT = 8;
 const MAX_REFERENCE_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_REFERENCE_TOTAL_BYTES = 20 * 1024 * 1024;
+const deadlinePreviewFormatter = new Intl.DateTimeFormat("zh-CN", {
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+  month: "numeric",
+});
+const timeWindowOptions: Array<{ description: string; label: string; value: RelativeTimeWindow }> = [
+  {
+    description: "高优先事项，适合需要马上响应的短任务。",
+    label: "30 分钟内",
+    value: "within_30m",
+  },
+  {
+    description: "适合小型修复、整理和快速确认类任务。",
+    label: "1 小时内",
+    value: "within_1h",
+  },
+  {
+    description: "适合需要少量分析与实现的常规工作。",
+    label: "3 小时内",
+    value: "within_3h",
+  },
+  {
+    description: "适合半天内推进完的任务。",
+    label: "12 小时内",
+    value: "within_12h",
+  },
+  {
+    description: "适合今天到明天内完成的任务。",
+    label: "24 小时内",
+    value: "within_24h",
+  },
+  {
+    description: "仅记录优先级，不设置具体截止时刻。",
+    label: "无明确截止",
+    value: "no_deadline",
+  },
+];
 
 function formatFileSize(size: number) {
   if (size >= 1024 * 1024) {
@@ -70,6 +114,43 @@ function readFileAsDataUrl(file: File) {
     reader.onerror = () => reject(reader.error || new Error(`读取文件失败：${file.name}`));
     reader.readAsDataURL(file);
   });
+}
+
+function describeTimeWindow(value: RelativeTimeWindow) {
+  return timeWindowOptions.find((option) => option.value === value) || {
+    description: "适合需要少量分析与实现的常规工作。",
+    label: "3 小时内",
+    value: "within_3h" as const,
+  };
+}
+
+function computeRelativeDeadlinePreview(value: RelativeTimeWindow) {
+  const now = new Date();
+  const next = new Date(now);
+
+  switch (value) {
+    case "within_30m":
+      next.setMinutes(next.getMinutes() + 30);
+      break;
+    case "within_1h":
+      next.setHours(next.getHours() + 1);
+      break;
+    case "within_3h":
+      next.setHours(next.getHours() + 3);
+      break;
+    case "within_12h":
+      next.setHours(next.getHours() + 12);
+      break;
+    case "within_24h":
+      next.setHours(next.getHours() + 24);
+      break;
+    case "no_deadline":
+      return null;
+    default:
+      return null;
+  }
+
+  return deadlinePreviewFormatter.format(next);
 }
 
 function DropdownField({
@@ -144,14 +225,13 @@ export function PublishTaskModal({
 }: PublishTaskModalProps) {
   const hasInitializedRef = useRef(false);
   const previousMemberIdRef = useRef("");
-  const [deadlineAt, setDeadlineAt] = useState("");
   const [priority, setPriority] = useState<"P0" | "P1" | "P2" | "P3">("P1");
   const [taskDescription, setTaskDescription] = useState("");
   const [referenceFiles, setReferenceFiles] = useState<TaskReferenceDraft[]>([]);
   const [referenceError, setReferenceError] = useState("");
   const [isReadingReferences, setIsReadingReferences] = useState(false);
   const [source, setSource] = useState("手动发布");
-  const [timeWindow, setTimeWindow] = useState<"immediate" | "today" | "this_week" | "no_deadline">("today");
+  const [timeWindow, setTimeWindow] = useState<RelativeTimeWindow>("within_3h");
   const [selectedCompany, setSelectedCompany] = useState("");
   const [selectedDepartment, setSelectedDepartment] = useState("");
   const [selectedMemberId, setSelectedMemberId] = useState("");
@@ -227,6 +307,8 @@ export function PublishTaskModal({
     ],
     [],
   );
+  const selectedTimeWindowOption = useMemo(() => describeTimeWindow(timeWindow), [timeWindow]);
+  const deadlinePreview = useMemo(() => computeRelativeDeadlinePreview(timeWindow), [timeWindow]);
 
   useEffect(() => {
     if (!open) {
@@ -261,10 +343,9 @@ export function PublishTaskModal({
       )
       .sort((left, right) => left.name.localeCompare(right.name, "zh-CN"));
 
-    setDeadlineAt("");
     setPriority("P1");
     setSource("手动发布");
-    setTimeWindow("today");
+    setTimeWindow("within_3h");
     setTaskDescription("");
     setReferenceFiles([]);
     setReferenceError("");
@@ -334,7 +415,6 @@ export function PublishTaskModal({
               source,
               taskDescription,
               timeWindow,
-              deadlineAt,
             });
           }}
         >
@@ -430,7 +510,7 @@ export function PublishTaskModal({
 
               {activeTab === "task" ? (
                 <>
-                  <div className="grid gap-4 md:grid-cols-[160px_180px_minmax(0,1fr)]">
+                  <div className="grid gap-4 md:grid-cols-[160px_minmax(0,1fr)]">
                     <DropdownField
                       label="优先级"
                       onSelect={(next) => setPriority(next as "P0" | "P1" | "P2" | "P3")}
@@ -448,40 +528,32 @@ export function PublishTaskModal({
                     <DropdownField
                       label="时间窗口"
                       onSelect={(next) =>
-                        setTimeWindow(next as "immediate" | "today" | "this_week" | "no_deadline")
+                        setTimeWindow(next as RelativeTimeWindow)
                       }
                       onToggle={(isOpen) => setOpenDropdown(isOpen ? "timeWindow" : null)}
                       open={openDropdown === "timeWindow"}
-                      options={[
-                        { label: "立即处理", value: "immediate" },
-                        { label: "今天内", value: "today" },
-                        { label: "这周内", value: "this_week" },
-                        { label: "无明确截止", value: "no_deadline" },
-                      ]}
-                      value={
-                        timeWindow === "immediate"
-                          ? "立即处理"
-                          : timeWindow === "today"
-                            ? "今天内"
-                            : timeWindow === "this_week"
-                              ? "这周内"
-                              : "无明确截止"
-                      }
+                      options={timeWindowOptions.map(({ label, value }) => ({ label, value }))}
+                      value={selectedTimeWindowOption.label}
                     />
+                  </div>
 
-                    <div className="form-control gap-2">
-                      <label className="label px-0 pb-1 pt-0">
-                        <span className="label-text text-[13px] font-bold text-[#334155]">
-                          具体截止时间
-                        </span>
-                      </label>
-                      <input
-                        className="input input-bordered bg-base-100 text-[14px] font-semibold text-base-content focus:outline-none"
-                        onChange={(event) => setDeadlineAt(event.target.value)}
-                        type="datetime-local"
-                        value={deadlineAt}
-                      />
+                  <div className="rounded-box border border-base-300 bg-base-200 px-4 py-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-base-content">时限说明</p>
+                        <p className="text-sm text-base-content/70">
+                          {selectedTimeWindowOption.description}
+                        </p>
+                      </div>
+                      <span className="badge badge-outline rounded-md">
+                        {selectedTimeWindowOption.label}
+                      </span>
                     </div>
+                    <p className="mt-3 text-xs text-base-content/60">
+                      {deadlinePreview
+                        ? `系统会按发布时间自动换算，预计截止时间：${deadlinePreview}`
+                        : "系统不会生成具体截止时间，只记录相对时限为“无明确截止”。"}
+                    </p>
                   </div>
 
                   <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_220px]">

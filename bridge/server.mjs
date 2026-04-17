@@ -1831,7 +1831,7 @@ function parseWaitFinishedQueue(content) {
 }
 
 function buildPendingCurrentTaskMarkdown(task, assignedAt) {
-  return `# 当前任务\n\n- 待解析新任务：${task.summary}\n- 优先级：${task.priority || "P1"}\n- 时间窗口：${task.timeWindow || "today"}\n- 截止时间：${task.deadlineAt || "未设置"}\n- 指派来源：${task.source || "手动发布"}\n- 指派时间：${assignedAt || new Date().toISOString()}\n- 下一步：先阅读 task_request.md 并生成 plan.md\n- 来源：任务发布\n`;
+  return `# 当前任务\n\n- 待解析新任务：${task.summary}\n- 优先级：${task.priority || "P1"}\n- 时间窗口：${task.timeWindow || "3 小时内"}\n- 截止时间：${task.deadlineAt || "未设置"}\n- 指派来源：${task.source || "手动发布"}\n- 指派时间：${assignedAt || new Date().toISOString()}\n- 下一步：先阅读 task_request.md 并生成 plan.md\n- 来源：任务发布\n`;
 }
 
 function buildNoTaskCurrentMarkdown() {
@@ -2008,6 +2008,25 @@ ${truncatePromptContent(metaContent || "暂无运行时元数据", 2000)}
 `;
 }
 
+function describeTaskTimeWindow(timeWindow) {
+  switch (String(timeWindow || "").trim()) {
+    case "within_30m":
+      return { deadlineAt: 30 * 60 * 1000, label: "30 分钟内" };
+    case "within_1h":
+      return { deadlineAt: 60 * 60 * 1000, label: "1 小时内" };
+    case "within_3h":
+      return { deadlineAt: 3 * 60 * 60 * 1000, label: "3 小时内" };
+    case "within_12h":
+      return { deadlineAt: 12 * 60 * 60 * 1000, label: "12 小时内" };
+    case "within_24h":
+      return { deadlineAt: 24 * 60 * 60 * 1000, label: "24 小时内" };
+    case "no_deadline":
+      return { deadlineAt: null, label: "无明确截止" };
+    default:
+      return { deadlineAt: 3 * 60 * 60 * 1000, label: "3 小时内" };
+  }
+}
+
 async function assignTaskWithinWorkspace(payload) {
   const workspacePath = String(payload.workspacePath || "").replace(/[\\/]+$/, "");
   const taskDescription = String(payload.taskDescription || "").trim();
@@ -2020,10 +2039,15 @@ async function assignTaskWithinWorkspace(payload) {
   }
 
   const assignedAt = new Date().toISOString();
-  const deadlineAt = String(payload.deadlineAt || "").trim();
   const priority = String(payload.priority || "P1").trim() || "P1";
   const source = String(payload.source || "manual").trim() || "manual";
-  const timeWindow = String(payload.timeWindow || "today").trim() || "today";
+  const timeWindowKey = String(payload.timeWindow || "within_3h").trim() || "within_3h";
+  const timeWindowMeta = describeTaskTimeWindow(timeWindowKey);
+  const deadlineAt =
+    typeof timeWindowMeta.deadlineAt === "number"
+      ? new Date(Date.parse(assignedAt) + timeWindowMeta.deadlineAt).toISOString()
+      : "";
+  const timeWindow = timeWindowMeta.label;
   const savedReferences = await persistTaskReferenceAttachments(
     workspacePath,
     payload.attachments,
@@ -2230,14 +2254,14 @@ async function completeCurrentTask(payload) {
   await mkdir(artifactsDir, { recursive: true });
   await writeFile(
     artifactPath,
-    `# 任务完成摘要\n\n- 任务：${currentTask.summary}\n- 完成时间：${completedAt}\n- 优先级：${currentTask.priority || "P1"}\n- 时间窗口：${currentTask.timeWindow || "today"}\n- 截止时间：${currentTask.deadlineAt || "未设置"}\n- 指派来源：${currentTask.source || "手动发布"}\n\n## 完成说明\n\n- 由客户端执行归档动作生成\n- 详情可结合 finished.md 与相关交付物继续补充\n`,
+    `# 任务完成摘要\n\n- 任务：${currentTask.summary}\n- 完成时间：${completedAt}\n- 优先级：${currentTask.priority || "P1"}\n- 时间窗口：${currentTask.timeWindow || "3 小时内"}\n- 截止时间：${currentTask.deadlineAt || "未设置"}\n- 指派来源：${currentTask.source || "手动发布"}\n\n## 完成说明\n\n- 由客户端执行归档动作生成\n- 详情可结合 finished.md 与相关交付物继续补充\n`,
     "utf8",
   );
 
   await appendMarkdownSection(
     finishedPath,
     `${completedAt} 完成任务`,
-    `- ${currentTask.summary}\n- 优先级：${currentTask.priority || "P1"}\n- 时间窗口：${currentTask.timeWindow || "today"}\n- 截止时间：${currentTask.deadlineAt || "未设置"}\n- 指派来源：${currentTask.source || "手动发布"}\n- 归档：artifacts/${artifactFileName}`,
+    `- ${currentTask.summary}\n- 优先级：${currentTask.priority || "P1"}\n- 时间窗口：${currentTask.timeWindow || "3 小时内"}\n- 截止时间：${currentTask.deadlineAt || "未设置"}\n- 指派来源：${currentTask.source || "手动发布"}\n- 归档：artifacts/${artifactFileName}`,
   );
   await appendDeliveryIndex(employeeRoot, {
     completedAt,
@@ -2271,7 +2295,7 @@ async function completeCurrentTask(payload) {
     );
     await writeFile(
       startupAckPath,
-      `# 首轮确认\n\n- 状态：待确认\n- 最近任务摘要：${nextTask.summary || nextSection.title}\n- 优先级：${nextTask.priority || "P1"}\n- 时间窗口：${nextTask.timeWindow || "today"}\n- 截止时间：${nextTask.deadlineAt || "未设置"}\n- 指派来源：${nextTask.source || "手动发布"}\n- 指派时间：${nextTask.assignedAt || new Date().toISOString()}\n\n## 要求\n\n1. 先阅读 task_request.md\n2. 生成或更新 plan.md\n3. 在本文件回写你的理解摘要、计划状态与下一步动作\n`,
+      `# 首轮确认\n\n- 状态：待确认\n- 最近任务摘要：${nextTask.summary || nextSection.title}\n- 优先级：${nextTask.priority || "P1"}\n- 时间窗口：${nextTask.timeWindow || "3 小时内"}\n- 截止时间：${nextTask.deadlineAt || "未设置"}\n- 指派来源：${nextTask.source || "手动发布"}\n- 指派时间：${nextTask.assignedAt || new Date().toISOString()}\n\n## 要求\n\n1. 先阅读 task_request.md\n2. 生成或更新 plan.md\n3. 在本文件回写你的理解摘要、计划状态与下一步动作\n`,
       "utf8",
     );
     await mergeJsonFile(runtimeMetaPath, {
@@ -3330,7 +3354,7 @@ async function enqueueEmployeeProjectDispatch(employeeRoot, entry) {
         source: entry.source ?? "手动发布",
         status: entry.status ?? "queued",
         taskSummary: entry.taskSummary,
-        timeWindow: entry.timeWindow ?? "today",
+        timeWindow: entry.timeWindow ?? "3 小时内",
         workspacePath: entry.workspacePath.replace(/\\/g, "/"),
       },
     ],
