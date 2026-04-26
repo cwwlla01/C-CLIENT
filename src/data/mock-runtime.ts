@@ -15,15 +15,19 @@ export type RuntimeAutomationSettings = {
 
 export type RuntimeMember = {
   inspector?: {
+    aiConfidence?: number | null;
     aiError?: string;
+    aiReason?: string;
     aiUsed?: boolean;
     autoPilotDecision?: string;
     confidence?: number;
     createdAt?: string;
+    decisionSource?: string;
     lastAutoReplyAt?: string | null;
     lastSilenceSeconds?: number;
     matchedTargetFiles?: string[];
     missingTargetFiles?: string[];
+    replyConfidence?: number | null;
     replyCandidate?: {
       riskLevel?: string;
       suggestedReply?: string;
@@ -69,6 +73,7 @@ export type RuntimeMember = {
   diagnostics: string[];
   automationSettings: RuntimeAutomationSettings;
   runtimeInfo?: {
+    codexSessionId?: string;
     lastAction?: string;
     pid?: number;
     resolvedShell?: string;

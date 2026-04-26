@@ -9,6 +9,8 @@ type TerminalWindowProps = {
   apiKey?: string;
   apiKeyEnabled?: boolean;
   bridgeWsOrigin?: string;
+  configuredModel?: string;
+  configuredReasoning?: string;
   member: RuntimeMember | null;
   onClose: () => void;
   terminalFontSize?: number;
@@ -31,6 +33,8 @@ export function TerminalWindow({
   apiKey = "",
   apiKeyEnabled = false,
   bridgeWsOrigin = "ws://127.0.0.1:4281",
+  configuredModel = "",
+  configuredReasoning = "",
   member,
   onClose,
   terminalFontSize = 13,
@@ -39,12 +43,18 @@ export function TerminalWindow({
   const [connectionState, setConnectionState] =
     useState<BridgeConnectionState>("connecting");
   const [connectionLabel, setConnectionLabel] = useState("连接本地 bridge...");
+  const [autoFollow, setAutoFollow] = useState(true);
+  const [hasUnreadOutput, setHasUnreadOutput] = useState(false);
+  const [suppressedNoiseCount, setSuppressedNoiseCount] = useState(0);
+  const [lastSuppressedNoise, setLastSuppressedNoise] = useState("");
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const inputCursorTimerRef = useRef<number | null>(null);
   const socketRef = useRef<WebSocket | null>(null);
+  const autoFollowRef = useRef(true);
+  const hasVisibleOutputRef = useRef(false);
 
   const bridgeUrl = useMemo(() => {
     if (!member) {
@@ -68,10 +78,66 @@ export function TerminalWindow({
   const runtimeShellLabel = member?.runtimeInfo?.resolvedShell ?? member?.shell ?? "";
   const memberName = member?.name ?? "";
 
+  const classifyNoise = (text: string) => {
+    const normalized = String(text || "").replace(/\s+/g, " ").trim();
+    if (!normalized) {
+      return "";
+    }
+
+    if (/MCP client .* failed to start/i.test(normalized)) {
+      return "MCP 客户端启动失败";
+    }
+    if (/MCP startup incomplete/i.test(normalized)) {
+      return "MCP 启动未完成";
+    }
+    if (/not logged in\. Run `codex mcp login/i.test(normalized)) {
+      return "MCP 未登录提示";
+    }
+    if (/plugin is not installed/i.test(normalized)) {
+      return "插件未安装提示";
+    }
+    if (/startup remote plugin sync failed/i.test(normalized)) {
+      return "远程插件同步失败";
+    }
+    if (/failed to warm featured plugin ids cache/i.test(normalized)) {
+      return "插件缓存预热失败";
+    }
+    if (/chatgpt authentication required to sync remote plugins/i.test(normalized)) {
+      return "远程插件鉴权失败";
+    }
+
+    return "";
+  };
+
+  useEffect(() => {
+    autoFollowRef.current = autoFollow;
+  }, [autoFollow]);
+
+  const sendCommand = (text: string) => {
+    const socket = socketRef.current;
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return false;
+    }
+
+    socket.send(
+      JSON.stringify({
+        type: "input",
+        data: text,
+      }),
+    );
+    return true;
+  };
+
   useEffect(() => {
     if (!member || !containerRef.current) {
       return;
     }
+
+    setAutoFollow(true);
+    setHasUnreadOutput(false);
+    setSuppressedNoiseCount(0);
+    setLastSuppressedNoise("");
+    hasVisibleOutputRef.current = false;
 
     const terminalTheme = {
       background: "#070C18",
@@ -160,18 +226,41 @@ export function TerminalWindow({
 
     setCursorMuted(true);
 
+    const normalizeDisplayChunk = (text: string) => {
+      let next = String(text || "");
+      if (!next) {
+        return "";
+      }
+
+      if (!hasVisibleOutputRef.current) {
+        next = next.replace(/^(?:\r?\n|\r)+/, "");
+      }
+
+      next = next.replace(/(\r?\n|\r){3,}/g, "\r\n\r\n");
+
+      if (next.trim()) {
+        hasVisibleOutputRef.current = true;
+      }
+
+      return next;
+    };
+
     const handleTerminalInput = terminal.onData((data) => {
       if (socket.readyState !== WebSocket.OPEN) {
         return;
       }
 
       showCursorTemporarily();
-      socket.send(
-        JSON.stringify({
-          type: "input",
-          data,
-        }),
-      );
+      sendCommand(data);
+    });
+
+    const handleTerminalScroll = terminal.onScroll((viewportY) => {
+      const buffer = terminal.buffer.active;
+      const atBottom = viewportY >= buffer.baseY;
+      setAutoFollow(atBottom);
+      if (atBottom) {
+        setHasUnreadOutput(false);
+      }
     });
 
     socket.onopen = () => {
@@ -196,14 +285,48 @@ export function TerminalWindow({
       }
 
       if (payload.type === "output") {
+        const noiseLabel = classifyNoise(payload.data);
+        if (noiseLabel) {
+          setSuppressedNoiseCount((current) => current + 1);
+          setLastSuppressedNoise(noiseLabel);
+          return;
+        }
+        const normalizedData = normalizeDisplayChunk(payload.data);
+        if (!normalizedData) {
+          return;
+        }
         setCursorMuted(true);
-        terminal.write(payload.data);
+        const previousViewportY = terminal.buffer.active.viewportY;
+        terminal.write(normalizedData);
+        if (!autoFollowRef.current) {
+          requestAnimationFrame(() => {
+            terminal.scrollToLine(previousViewportY);
+          });
+          setHasUnreadOutput(true);
+        }
         return;
       }
 
       if (payload.type === "meta") {
+        const noiseLabel = classifyNoise(payload.data);
+        if (noiseLabel) {
+          setSuppressedNoiseCount((current) => current + 1);
+          setLastSuppressedNoise(noiseLabel);
+          return;
+        }
+        const normalizedData = normalizeDisplayChunk(payload.data);
+        if (!normalizedData) {
+          return;
+        }
         setCursorMuted(true);
-        terminal.writeln(`\r\n${payload.data}`);
+        const previousViewportY = terminal.buffer.active.viewportY;
+        terminal.writeln(normalizedData.replace(/\r?\n$/, ""));
+        if (!autoFollowRef.current) {
+          requestAnimationFrame(() => {
+            terminal.scrollToLine(previousViewportY);
+          });
+          setHasUnreadOutput(true);
+        }
         return;
       }
 
@@ -264,6 +387,7 @@ export function TerminalWindow({
         inputCursorTimerRef.current = null;
       }
       handleTerminalInput.dispose();
+      handleTerminalScroll.dispose();
       socket.close();
       terminal.dispose();
       fitAddonRef.current = null;
@@ -286,6 +410,44 @@ export function TerminalWindow({
             </p>
             <p className="truncate text-xs text-neutral-content/60">{member.workspace}</p>
           </div>
+          <div className="flex items-center gap-2">
+            {suppressedNoiseCount > 0 ? (
+              <span className="badge badge-outline border-warning/30 text-warning">
+                已折叠噪音 {suppressedNoiseCount}
+              </span>
+            ) : null}
+            <button
+              className={`btn btn-ghost btn-xs ${autoFollow ? "" : "text-warning"}`}
+              onClick={() => {
+                const terminal = terminalRef.current;
+                if (!terminal) {
+                  return;
+                }
+                if (autoFollow) {
+                  setAutoFollow(false);
+                  return;
+                }
+                terminal.scrollToBottom();
+                setAutoFollow(true);
+                setHasUnreadOutput(false);
+                terminal.focus();
+              }}
+              type="button"
+            >
+              {autoFollow ? "暂停跟随" : "恢复跟随"}
+            </button>
+            <button
+              className="btn btn-ghost btn-xs"
+              onClick={() => {
+                terminalRef.current?.clear();
+                setHasUnreadOutput(false);
+                hasVisibleOutputRef.current = false;
+              }}
+              type="button"
+            >
+              清屏
+            </button>
+          </div>
           <span className={`text-xs font-medium ${stateToneMap[connectionState]}`}>
             {connectionLabel}
           </span>
@@ -306,13 +468,47 @@ export function TerminalWindow({
         </div>
 
         <div className="border-t border-neutral-content/10 bg-neutral px-5 py-3">
-          <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-content/60">
-            <span className="badge badge-outline border-neutral-content/15 text-neutral-content/70">
-              直接在终端区域输入
-            </span>
-            <span>Enter 执行命令</span>
-            <span>Ctrl+C 中断</span>
-            <span>Ctrl+V / 右键粘贴</span>
+          <div className="flex flex-col gap-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+              <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">本地会话</p>
+                <p className="mt-2 break-all text-sm text-neutral-content">{member.runtimeInfo?.sessionId || "-"}</p>
+              </div>
+              <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">Codex 会话</p>
+                <p className="mt-2 break-all text-sm text-neutral-content">{member.runtimeInfo?.codexSessionId || "-"}</p>
+              </div>
+              <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">配置模型</p>
+                <p className="mt-2 text-sm text-neutral-content">
+                  {configuredModel || "-"}
+                  {configuredReasoning ? ` · ${configuredReasoning}` : ""}
+                </p>
+              </div>
+              <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
+                <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">进程 / 权限</p>
+                <p className="mt-2 text-sm text-neutral-content">
+                  pid {typeof member.runtimeInfo?.pid === "number" ? member.runtimeInfo.pid : "-"} · {member.permission}
+                </p>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-neutral-content/60">
+              <span className="badge badge-outline border-neutral-content/15 text-neutral-content/70">Codex 基本信息</span>
+              <span className={`badge badge-outline border-neutral-content/15 ${autoFollow ? "text-emerald-300" : "text-warning"}`}>
+                {autoFollow ? "跟随输出中" : "已暂停跟随"}
+              </span>
+              {hasUnreadOutput ? (
+                <span className="badge badge-outline border-neutral-content/15 text-warning">
+                  有新输出
+                </span>
+              ) : null}
+              {lastSuppressedNoise ? (
+                <span className="text-warning">最近折叠：{lastSuppressedNoise}</span>
+              ) : null}
+              <span>终端区域保留原生交互</span>
+              <span>Ctrl+C 可直接中断</span>
+              <span>如需输入，直接在终端区域键入</span>
+            </div>
           </div>
         </div>
       </div>

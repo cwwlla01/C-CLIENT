@@ -243,6 +243,7 @@ function loadApiSecurityState(): ApiSecurityState {
 
 type DiscoveredRuntime = {
   company?: string;
+  codexSessionId?: string | null;
   currentTask: string;
   department?: string;
   employeeCode: string;
@@ -568,6 +569,7 @@ function memberFromDiscoveredRuntime(runtime: DiscoveredRuntime): RuntimeMember 
     taskSource: runtime.taskSource ?? null,
     taskTimeWindow: runtime.taskTimeWindow ?? null,
     runtimeInfo: {
+      codexSessionId: runtime.codexSessionId ?? undefined,
       lastAction: runtime.lastAction ?? runtime.status,
       pid: runtime.pid,
       resolvedShell: runtime.resolvedShell,
@@ -1669,6 +1671,7 @@ function App() {
           recoveryPending: false,
           runtimeInfo: {
             ...current.runtimeInfo,
+            codexSessionId: current.runtimeInfo?.codexSessionId,
             lastAction: "stop",
             pid: undefined,
             sessionId: "",
@@ -1776,6 +1779,7 @@ function App() {
           recoveryPending: false,
           runtimeInfo: {
             ...current.runtimeInfo,
+            codexSessionId: payload.codexSessionId ?? current.runtimeInfo?.codexSessionId,
             lastAction: "restart",
             pid: payload.pid,
             resolvedShell: payload.resolvedShell,
@@ -1860,6 +1864,7 @@ function App() {
         recoveryPending: false,
         runtimeInfo: {
           ...current.runtimeInfo,
+          codexSessionId: payload.codexSessionId ?? current.runtimeInfo?.codexSessionId,
           lastAction: "start",
           pid: payload.pid,
           resolvedShell: payload.resolvedShell,
@@ -2723,6 +2728,7 @@ function App() {
           heartbeatLabel: runtimePayload.reused ? "已附着现有会话" : "CLI 已启动",
           recoveryPending: false,
           runtimeInfo: {
+            codexSessionId: runtimePayload.codexSessionId ?? undefined,
             pid: runtimePayload.pid,
             resolvedShell: runtimePayload.resolvedShell,
             sessionId: runtimePayload.sessionId,
@@ -2793,7 +2799,7 @@ function App() {
     <div className="min-h-screen bg-shell-app text-shell-text">
       <div className="mx-auto flex min-h-screen max-w-[1680px] flex-col px-6 py-5">
         {workspaceMessage ? (
-          <div className="toast toast-top toast-end z-[90]">
+          <div className="toast toast-top toast-end z-[250]">
             <div className="alert alert-success">
               <span>{workspaceMessage}</span>
             </div>
@@ -2801,7 +2807,7 @@ function App() {
         ) : null}
 
         {workspaceError ? (
-          <div className="toast toast-top toast-end z-[90]">
+          <div className="toast toast-top toast-end z-[250]">
             <div className="alert alert-error">
               <span>{workspaceError}</span>
             </div>
@@ -3160,6 +3166,8 @@ function App() {
           apiKey={apiSecurity.apiKey}
           apiKeyEnabled={apiSecurity.enabled}
           bridgeWsOrigin={BRIDGE_WS_ORIGIN}
+          configuredModel={codexSettingsState.config.model}
+          configuredReasoning={codexSettingsState.config.modelReasoningEffort}
           member={terminalMember}
           onClose={() => setTerminalMemberId(null)}
           terminalFontSize={settings.terminalFontSize}

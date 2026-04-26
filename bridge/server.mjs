@@ -366,6 +366,10 @@ async function callInspectorAiReview(settings, context) {
     "- summary: string",
     "- suggestions: string[]",
     "- risks: string[]",
+    "- confidence: number (0~1)",
+    "- reason: string",
+    "- suggestedReply: string",
+    "- replyConfidence: number (0~1)",
     "",
     "上下文：",
     JSON.stringify(context, null, 2),
@@ -414,7 +418,17 @@ async function callInspectorAiReview(settings, context) {
   }
 
   return {
+    confidence:
+      typeof parsed.confidence === "number"
+        ? Math.max(0, Math.min(1, parsed.confidence))
+        : null,
+    reason: String(parsed.reason || "").trim(),
     risks: Array.isArray(parsed.risks) ? parsed.risks.map((item) => String(item)) : [],
+    suggestedReply: String(parsed.suggestedReply || "").trim(),
+    replyConfidence:
+      typeof parsed.replyConfidence === "number"
+        ? Math.max(0, Math.min(1, parsed.replyConfidence))
+        : null,
     suggestions: Array.isArray(parsed.suggestions) ? parsed.suggestions.map((item) => String(item)) : [],
     summary: String(parsed.summary || "").trim(),
     verdict: ["pass", "risk", "insufficient"].includes(String(parsed.verdict || ""))
@@ -745,6 +759,7 @@ async function buildInspectorResult(workspacePath, session = null) {
   }
 
   let autoPilotDecision = "none";
+  let decisionSource = "rules";
   if (replyCandidate) {
     suggestions.push(replyCandidate.summary);
     if (replyCandidate.riskLevel === "high") {
@@ -771,6 +786,9 @@ async function buildInspectorResult(workspacePath, session = null) {
 
   let aiUsed = false;
   let aiError = "";
+  let aiConfidence = null;
+  let aiReason = "";
+  let replyConfidence = null;
   const shouldUseAi =
     settings.ai.enabled &&
     (settings.inspectionMode === "ai_only" ||
@@ -794,6 +812,9 @@ async function buildInspectorResult(workspacePath, session = null) {
       });
       if (aiResult) {
         aiUsed = true;
+        aiConfidence = aiResult.confidence;
+        aiReason = aiResult.reason;
+        replyConfidence = aiResult.replyConfidence;
         if (aiResult.summary) {
           summary = aiResult.summary;
         }
@@ -803,8 +824,40 @@ async function buildInspectorResult(workspacePath, session = null) {
         if (Array.isArray(aiResult.risks) && aiResult.risks.length > 0) {
           risks.splice(0, risks.length, ...Array.from(new Set([...risks, ...aiResult.risks])));
         }
-        if (aiResult.verdict === "risk" || (aiResult.verdict === "pass" && missingTargetFiles.length === 0)) {
-          verdict = aiResult.verdict;
+        if (blockedScore >= settings.thresholds.blockedScore || replyCandidate?.riskLevel === "high") {
+          verdict = "risk";
+        } else if (
+          aiResult.verdict === "pass" &&
+          missingTargetFiles.length === 0 &&
+          Number(aiResult.confidence || 0) >= 0.7
+        ) {
+          verdict = "pass";
+        } else if (aiResult.verdict === "risk" && Number(aiResult.confidence || 0) >= 0.6) {
+          verdict = "risk";
+        }
+        if (aiResult.reason) {
+          risks.push(`AI 判断依据：${aiResult.reason}`);
+        }
+        if (aiResult.suggestedReply && !replyCandidate?.suggestedReply && Number(aiResult.replyConfidence || 0) >= 0.75) {
+          const aiSuggestedType = "ai_suggested_reply";
+          const aiRiskLevel = "medium";
+          suggestions.push("AI 兜底生成了一条建议回复，可先人工确认。");
+          decisionSource = "rules+ai";
+          if (settings.autopilotMode === "suggest_only") {
+            autoPilotDecision = "suggested";
+          }
+          if (
+            settings.autoReplyEnabled &&
+            settings.allowedReplyTypes.includes(aiSuggestedType) &&
+            !settings.blockedReplyTypes.includes(aiSuggestedType) &&
+            settings.autopilotMode === "full_auto" &&
+            !settings.highRiskAlwaysManual
+          ) {
+            autoPilotDecision = "eligible_auto";
+          }
+        }
+        if (aiUsed) {
+          decisionSource = "rules+ai";
         }
       }
     } catch (error) {
@@ -814,12 +867,16 @@ async function buildInspectorResult(workspacePath, session = null) {
 
   return {
     aiError,
+    aiConfidence,
+    aiReason,
     aiUsed,
     autoPilotDecision,
     confidence,
     createdAt: new Date().toISOString(),
+    decisionSource,
     lastAutoReplyAt,
     lastSilenceSeconds: silenceSeconds,
+    replyConfidence,
     replyCandidate,
     risks,
     ruleMatches,
@@ -3059,6 +3116,7 @@ async function discoverWorkspaces(projectRoot) {
 
       runtimes.push({
         company: meta.company ?? deriveCompanyFromWorkspace(normalizedRoot, workspacePath),
+        codexSessionId: meta.codexSessionId ?? null,
         currentTask: currentTaskState.currentTask,
         department: meta.department ?? deriveDepartmentFromWorkspace(normalizedRoot, workspacePath),
         diagnostics: [],

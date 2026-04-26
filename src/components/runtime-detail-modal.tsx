@@ -719,15 +719,9 @@ export function RuntimeDetailModal({
                     </div>
                     <div className="rounded-box border border-base-300 bg-base-100 px-3 py-3">
                       <div className="flex flex-wrap gap-4 text-xs text-shell-muted">
-                        <span>
-                          结果来源：
-                          {inspectorResult.aiUsed
-                            ? inspectorResult.autoPilotDecision && inspectorResult.autoPilotDecision !== "none"
-                              ? "规则 + AI + 自动驾驶"
-                            : "规则 + AI"
-                          : inspectorResult.autoPilotDecision && inspectorResult.autoPilotDecision !== "none"
-                            ? "规则 + 自动驾驶"
-                            : "规则"}
+                      <span>
+                        结果来源：
+                        {inspectorResult.decisionSource || (inspectorResult.aiUsed ? "rules+ai" : "rules")}
                       </span>
                       <span>最近检查：{formatDateTime(inspectorResult.createdAt)}</span>
                       {typeof inspectorResult.lastSilenceSeconds === "number" ? (
@@ -736,7 +730,13 @@ export function RuntimeDetailModal({
                       {inspectorResult.lastAutoReplyAt ? (
                         <span>最近自动回复：{formatDateTime(inspectorResult.lastAutoReplyAt)}</span>
                       ) : null}
-                      </div>
+                      {typeof inspectorResult.aiConfidence === "number" ? (
+                        <span>AI 置信度：{(inspectorResult.aiConfidence * 100).toFixed(0)}%</span>
+                      ) : null}
+                      {typeof inspectorResult.replyConfidence === "number" ? (
+                        <span>回复置信度：{(inspectorResult.replyConfidence * 100).toFixed(0)}%</span>
+                      ) : null}
+                    </div>
                       <p className="mt-3 text-sm leading-6 text-shell-text">
                         {inspectorResult.summary || "暂无观察结果摘要"}
                       </p>
@@ -769,6 +769,12 @@ export function RuntimeDetailModal({
                     {inspectorResult.aiError ? (
                       <div className="card bg-base-100 px-3 py-3 text-sm text-warning shadow-none">
                         AI 兜底失败：{inspectorResult.aiError}
+                      </div>
+                    ) : null}
+                    {inspectorResult.aiReason ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">AI 判断依据</p>
+                        <p className="mt-2 text-sm text-shell-text">{inspectorResult.aiReason}</p>
                       </div>
                     ) : null}
                     {Array.isArray(inspectorResult.suggestions) && inspectorResult.suggestions.length > 0 ? (
