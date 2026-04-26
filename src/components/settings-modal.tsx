@@ -36,10 +36,15 @@ type SettingsModalProps = {
     error: string;
     filePath: string;
     saving: boolean;
+    uiLockEnabled: boolean;
+    uiPassword: string;
+    uiPasswordSet: boolean;
   };
   onApiSecurityChange: (patch: {
     apiKey?: string;
     enabled?: boolean;
+    uiLockEnabled?: boolean;
+    uiPassword?: string;
   }) => void;
   onCodexAuthChange: (patch: Partial<CodexAuthValues>) => void;
   onCodexConfigChange: (patch: Partial<CodexConfigValues>) => void;
@@ -455,6 +460,39 @@ export function SettingsModal({
                     <div className="rounded-box border border-base-300 px-4 py-4 text-sm text-base-content/70">
                       <p>REST 请求头：`X-CClient-Key`</p>
                       <p className="mt-1">终端 WebSocket：`/terminal?...&token=YOUR_KEY`</p>
+                    </div>
+
+                    <div className="divider my-1">登录保护</div>
+
+                    <div className="grid gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
+                      <label className="label cursor-pointer gap-3 self-end">
+                        <span className="label-text font-medium">启用登录密码</span>
+                        <input
+                          checked={apiSecurityState.uiLockEnabled}
+                          className="toggle toggle-primary"
+                          onChange={(event) =>
+                            onApiSecurityChange({ uiLockEnabled: event.target.checked })
+                          }
+                          type="checkbox"
+                        />
+                      </label>
+
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">登录密码</span>
+                        <input
+                          className="input input-bordered"
+                          onChange={(event) =>
+                            onApiSecurityChange({ uiPassword: event.target.value })
+                          }
+                          placeholder={apiSecurityState.uiPasswordSet ? "留空表示保持当前密码" : "设置新的登录密码"}
+                          type="password"
+                          value={apiSecurityState.uiPassword}
+                        />
+                      </label>
+
+                      <div className="self-end text-xs text-base-content/60">
+                        {apiSecurityState.uiPasswordSet ? "已设置密码" : "未设置密码"}
+                      </div>
                     </div>
                   </div>
                 </div>

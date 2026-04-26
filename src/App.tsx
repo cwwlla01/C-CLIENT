@@ -76,6 +76,7 @@ const BRIDGE_WS_ORIGIN = runtimePublicConfig.bridgeWsOrigin;
 
 const SETTINGS_STORAGE_KEY = "cclient.settings.v1";
 const API_SECURITY_STORAGE_KEY = "cclient.api-security.v1";
+const UI_LOCK_SESSION_PREFIX = "cclient.ui-lock.unlocked";
 const ONBOARDING_DISMISSED_STORAGE_KEY = "cclient.onboarding.dismissed.v1";
 const ONBOARDING_TASK_PUBLISHED_STORAGE_KEY = "cclient.onboarding.task-published.v1";
 const TOAST_AUTO_CLOSE_MS = 3200;
@@ -116,6 +117,10 @@ type ApiSecurityState = {
   error: string;
   filePath: string;
   saving: boolean;
+  uiSessionToken: string;
+  uiLockEnabled: boolean;
+  uiPassword: string;
+  uiPasswordSet: boolean;
 };
 
 type DeliveryHistoryEntry = {
@@ -219,6 +224,10 @@ function loadApiSecurityState(): ApiSecurityState {
         error: "",
         filePath: "",
         saving: false,
+        uiSessionToken: "",
+        uiLockEnabled: false,
+        uiPassword: "",
+        uiPasswordSet: false,
       };
     }
 
@@ -229,6 +238,10 @@ function loadApiSecurityState(): ApiSecurityState {
       error: "",
       filePath: parsed.filePath ?? "",
       saving: false,
+      uiSessionToken: "",
+      uiLockEnabled: Boolean(parsed.uiLockEnabled),
+      uiPassword: "",
+      uiPasswordSet: Boolean(parsed.uiPasswordSet),
     };
   } catch {
     return {
@@ -237,6 +250,10 @@ function loadApiSecurityState(): ApiSecurityState {
       error: "",
       filePath: "",
       saving: false,
+      uiSessionToken: "",
+      uiLockEnabled: false,
+      uiPassword: "",
+      uiPasswordSet: false,
     };
   }
 }
@@ -289,13 +306,16 @@ function extractProjectNameFromWorkspace(workspacePath: string) {
 }
 
 function buildBridgeHeaders(
-  apiSecurity: Pick<ApiSecurityState, "apiKey" | "enabled">,
+  apiSecurity: Pick<ApiSecurityState, "apiKey" | "enabled" | "uiSessionToken">,
   includeJson = true,
 ) {
   return {
     ...(includeJson ? { "Content-Type": "application/json" } : {}),
     ...(apiSecurity.enabled && apiSecurity.apiKey.trim()
       ? { "X-CClient-Key": apiSecurity.apiKey.trim() }
+      : {}),
+    ...(apiSecurity.uiSessionToken.trim()
+      ? { "X-CClient-Ui-Token": apiSecurity.uiSessionToken.trim() }
       : {}),
   };
 }
@@ -307,7 +327,7 @@ function buildBridgeUrl(path: string) {
 function buildBridgeDownloadUrl(
   endpointPath: string,
   params: Record<string, string | null | undefined>,
-  apiSecurity: Pick<ApiSecurityState, "apiKey" | "enabled">,
+  apiSecurity: Pick<ApiSecurityState, "apiKey" | "enabled" | "uiSessionToken">,
 ) {
   const url = new URL(`${BRIDGE_HTTP_ORIGIN}${endpointPath}`);
 
@@ -320,6 +340,9 @@ function buildBridgeDownloadUrl(
   if (apiSecurity.enabled && apiSecurity.apiKey.trim()) {
     url.searchParams.set("token", apiSecurity.apiKey.trim());
   }
+  if (apiSecurity.uiSessionToken.trim()) {
+    url.searchParams.set("ui_token", apiSecurity.uiSessionToken.trim());
+  }
 
   return url.toString();
 }
@@ -330,6 +353,10 @@ function loadStoredBoolean(key: string) {
   } catch {
     return false;
   }
+}
+
+function buildUiLockSessionKey(projectPath: string) {
+  return `${UI_LOCK_SESSION_PREFIX}:${normalizePathKey(projectPath || "default")}`;
 }
 
 function normalizeCodexSettingsPayload(
@@ -637,10 +664,14 @@ function App() {
     typeof window === "undefined"
       ? {
           apiKey: "",
-          enabled: false,
-          error: "",
-          filePath: "",
-          saving: false,
+        enabled: false,
+        error: "",
+        filePath: "",
+        saving: false,
+        uiSessionToken: "",
+        uiLockEnabled: false,
+        uiPassword: "",
+        uiPasswordSet: false,
         }
       : loadApiSecurityState(),
   );
@@ -687,6 +718,15 @@ function App() {
       ? false
       : loadStoredBoolean(ONBOARDING_TASK_PUBLISHED_STORAGE_KEY),
   );
+  const [uiLockPasswordInput, setUiLockPasswordInput] = useState("");
+  const [uiLockError, setUiLockError] = useState("");
+  const [uiLockLoading, setUiLockLoading] = useState(false);
+  const [uiUnlocked, setUiUnlocked] = useState<boolean>(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+    return Boolean(window.sessionStorage.getItem(buildUiLockSessionKey(runtimePublicConfig.defaultProjectPath)));
+  });
   const apiSecurityRef = useRef(apiSecurity);
 
   useEffect(() => {
@@ -707,6 +747,8 @@ function App() {
     anchor.remove();
   }, []);
 
+  const canUseProtectedApi = !apiSecurity.uiLockEnabled || uiUnlocked;
+
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", settings.theme);
     window.localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
@@ -719,9 +761,11 @@ function App() {
         apiKey: apiSecurity.apiKey,
         enabled: apiSecurity.enabled,
         filePath: apiSecurity.filePath,
+        uiLockEnabled: apiSecurity.uiLockEnabled,
+        uiPasswordSet: apiSecurity.uiPasswordSet,
       }),
     );
-  }, [apiSecurity.apiKey, apiSecurity.enabled, apiSecurity.filePath]);
+  }, [apiSecurity.apiKey, apiSecurity.enabled, apiSecurity.filePath, apiSecurity.uiLockEnabled, apiSecurity.uiPasswordSet]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -788,6 +832,9 @@ function App() {
 
   const refreshWorkspaceNodes = useCallback(
     async ({ silent = false } = {}) => {
+      if (!canUseProtectedApi) {
+        return;
+      }
       try {
         const response = await fetch(buildBridgeUrl("/api/workspace/discover"), {
           method: "POST",
@@ -832,7 +879,7 @@ function App() {
         setHasWorkspaceScanCompleted(true);
       }
     },
-    [setNodes, settings.projectPath],
+    [canUseProtectedApi, setNodes, settings.projectPath],
   );
 
   useEffect(() => {
@@ -862,6 +909,9 @@ function App() {
   }, [hasRunningNodes, refreshWorkspaceNodes]);
 
   const loadPromptRules = useCallback(async () => {
+    if (!canUseProtectedApi) {
+      return;
+    }
     setPromptRulesState((current) => ({
       ...current,
       error: "",
@@ -895,9 +945,12 @@ function App() {
         loading: false,
       }));
     }
-  }, [settings.projectPath]);
+  }, [canUseProtectedApi, settings.projectPath]);
 
   const loadInspectorSettings = useCallback(async () => {
+    if (!canUseProtectedApi) {
+      return;
+    }
     setInspectorSettingsState((current) => ({
       ...current,
       error: "",
@@ -936,7 +989,7 @@ function App() {
         loading: false,
       }));
     }
-  }, [getBridgeHeaders, settings.projectPath]);
+  }, [canUseProtectedApi, getBridgeHeaders, settings.projectPath]);
 
   const loadApiSecurity = useCallback(async () => {
     try {
@@ -958,6 +1011,8 @@ function App() {
         error: "",
         filePath: payload.filePath ?? "",
         saving: false,
+        uiLockEnabled: Boolean(payload.uiLockEnabled),
+        uiPasswordSet: Boolean(payload.uiPasswordSet),
       }));
     } catch (error) {
       setApiSecurity((current) => ({
@@ -969,6 +1024,9 @@ function App() {
   }, [getBridgeHeaders, settings.projectPath]);
 
   const loadCodexSettings = useCallback(async () => {
+    if (!canUseProtectedApi) {
+      return;
+    }
     setCodexSettingsState((current) => ({
       ...current,
       error: "",
@@ -1004,11 +1062,15 @@ function App() {
         loading: false,
       }));
     }
-  }, [getBridgeHeaders]);
+  }, [canUseProtectedApi, getBridgeHeaders]);
 
   useEffect(() => {
     void loadCodexSettings();
   }, [loadCodexSettings]);
+
+  useEffect(() => {
+    void loadApiSecurity();
+  }, [loadApiSecurity]);
 
   useEffect(() => {
     if (!settingsOpen) {
@@ -1022,6 +1084,19 @@ function App() {
   }, [loadApiSecurity, loadCodexSettings, loadInspectorSettings, loadPromptRules, settingsOpen]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const token = window.sessionStorage.getItem(buildUiLockSessionKey(settings.projectPath)) || "";
+    setUiUnlocked(!apiSecurity.uiLockEnabled || Boolean(token));
+    setApiSecurity((current) => ({
+      ...current,
+      uiSessionToken: token,
+    }));
+  }, [apiSecurity.uiLockEnabled, settings.projectPath]);
+
+  useEffect(() => {
     if (!onboardingOpen) {
       return;
     }
@@ -1030,6 +1105,11 @@ function App() {
   }, [loadCodexSettings, onboardingOpen]);
 
   const refreshPendingPrompts = useCallback(async () => {
+    if (!canUseProtectedApi) {
+      setPendingPrompts([]);
+      setPromptHandlingLogs([]);
+      return;
+    }
     try {
       const response = await fetch(buildBridgeUrl("/api/runtime/prompts"), {
         headers: getBridgeHeaders(false),
@@ -1226,7 +1306,7 @@ function App() {
       testMessage: "",
       testModels: [],
     }));
-  }, []);
+  }, [canUseProtectedApi]);
 
   const handleCodexAuthChange = useCallback((patch: Partial<CodexAuthValues>) => {
     setCodexSettingsState((current) => ({
@@ -2640,7 +2720,7 @@ function App() {
     }
   }, [getBridgeHeaders, inspectorSettingsState.settings, settings.projectPath]);
 
-  const handleApiSecurityChange = useCallback((patch: { apiKey?: string; enabled?: boolean }) => {
+  const handleApiSecurityChange = useCallback((patch: { apiKey?: string; enabled?: boolean; uiLockEnabled?: boolean; uiPassword?: string }) => {
     setApiSecurity((current) => ({
       ...current,
       ...patch,
@@ -2671,6 +2751,8 @@ function App() {
           apiKey: apiSecurity.apiKey,
           enabled: apiSecurity.enabled,
           projectRoot: settings.projectPath,
+          uiLockEnabled: apiSecurity.uiLockEnabled,
+          uiPassword: apiSecurity.uiPassword,
         }),
       });
       const payload = await response.json();
@@ -2684,6 +2766,9 @@ function App() {
         error: "",
         filePath: payload.filePath ?? current.filePath,
         saving: false,
+        uiLockEnabled: Boolean(payload.uiLockEnabled),
+        uiPassword: "",
+        uiPasswordSet: Boolean(payload.uiPasswordSet),
       }));
       setWorkspaceMessage(
         payload.enabled ? "本地 API 鉴权已启用" : "本地 API 鉴权已关闭",
@@ -2696,7 +2781,43 @@ function App() {
       }));
       setWorkspaceError(error instanceof Error ? error.message : "API 鉴权配置保存失败");
     }
-  }, [apiSecurity.apiKey, apiSecurity.enabled, getBridgeHeaders, settings.projectPath]);
+  }, [apiSecurity.apiKey, apiSecurity.enabled, apiSecurity.uiLockEnabled, apiSecurity.uiPassword, getBridgeHeaders, settings.projectPath]);
+
+  const handleVerifyUiLock = useCallback(async () => {
+    setUiLockError("");
+    setUiLockLoading(true);
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/security/verify-ui-lock"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          password: uiLockPasswordInput,
+          projectRoot: settings.projectPath,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "登录失败");
+      }
+
+      if (typeof window !== "undefined") {
+        window.sessionStorage.setItem(buildUiLockSessionKey(settings.projectPath), String(payload.uiSessionToken || ""));
+      }
+      setApiSecurity((current) => ({
+        ...current,
+        uiSessionToken: String(payload.uiSessionToken || ""),
+      }));
+      setUiUnlocked(true);
+      setUiLockPasswordInput("");
+    } catch (error) {
+      setUiLockError(error instanceof Error ? error.message : "登录失败");
+    } finally {
+      setUiLockLoading(false);
+    }
+  }, [settings.projectPath, uiLockPasswordInput]);
 
   const handleCreateEmployee = useCallback(
     async (form: NewEmployeeForm) => {
@@ -2852,6 +2973,48 @@ function App() {
           <div className="toast toast-top toast-end z-[250]">
             <div className="alert alert-error">
               <span>{workspaceError}</span>
+            </div>
+          </div>
+        ) : null}
+
+        {apiSecurity.uiLockEnabled && !uiUnlocked ? (
+          <div className="fixed inset-0 z-[400] flex items-center justify-center bg-[#020617]/85 backdrop-blur-sm">
+            <div className="card w-full max-w-md border border-base-300 bg-base-100 shadow-xl">
+              <div className="card-body gap-4">
+                <div>
+                  <h2 className="card-title text-xl">登录保护</h2>
+                  <p className="mt-1 text-sm text-base-content/60">
+                    当前客户端已启用登录保护，请输入密码后继续访问。
+                  </p>
+                </div>
+
+                <label className="form-control gap-2">
+                  <span className="label-text font-medium">登录密码</span>
+                  <input
+                    className="input input-bordered"
+                    onChange={(event) => setUiLockPasswordInput(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        void handleVerifyUiLock();
+                      }
+                    }}
+                    type="password"
+                    value={uiLockPasswordInput}
+                  />
+                </label>
+
+                {uiLockError ? (
+                  <div className="alert alert-error">
+                    <span>{uiLockError}</span>
+                  </div>
+                ) : null}
+
+                <div className="flex justify-end">
+                  <button className={`btn btn-primary ${uiLockLoading ? "loading" : ""}`} onClick={() => void handleVerifyUiLock()} type="button">
+                    {uiLockLoading ? "验证中" : "登录"}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         ) : null}

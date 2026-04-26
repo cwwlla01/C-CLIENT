@@ -5,7 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { createReadStream, existsSync } from "node:fs";
 import { access, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { WebSocketServer } from "ws";
@@ -32,6 +32,7 @@ const pendingPrompts = new Map();
 const promptHandlingLogs = [];
 const jsonMergeQueues = new Map();
 const inspectorTimers = new Map();
+const activeUiLockSessions = new Map();
 let sessionSequence = 0n;
 const PROMPT_LOG_LIMIT = 80;
 let activeSecurityConfig = {
@@ -39,7 +40,17 @@ let activeSecurityConfig = {
   enabled: false,
   filePath: "",
   projectRoot: "",
+  uiLockEnabled: false,
+  uiPasswordHash: "",
 };
+
+function hashUiPassword(password) {
+  return createHash("sha256").update(String(password || ""), "utf8").digest("hex");
+}
+
+function createUiSessionToken() {
+  return randomBytes(24).toString("hex");
+}
 
 function defaultAutomationSettings() {
   return {
@@ -136,6 +147,8 @@ async function loadSecurityConfig(projectRoot) {
       enabled: Boolean(parsed.enabled),
       filePath: filePath.replace(/\\/g, "/"),
       projectRoot: normalizedRoot.replace(/\\/g, "/"),
+      uiLockEnabled: Boolean(parsed.uiLockEnabled),
+      uiPasswordHash: String(parsed.uiPasswordHash || ""),
     };
     return activeSecurityConfig;
   } catch {
@@ -144,6 +157,8 @@ async function loadSecurityConfig(projectRoot) {
       enabled: false,
       filePath: filePath.replace(/\\/g, "/"),
       projectRoot: normalizedRoot.replace(/\\/g, "/"),
+      uiLockEnabled: false,
+      uiPasswordHash: "",
     };
     return activeSecurityConfig;
   }
@@ -160,9 +175,22 @@ async function saveSecurityConfig(projectRoot, payload, providedKey) {
     throw new Error("invalid api key");
   }
 
+  const requestedUiLockEnabled = payload.uiLockEnabled === true;
+  const currentUiPasswordHash = String(currentConfig.uiPasswordHash || "");
+  const incomingUiPassword = String(payload.uiPassword || "").trim();
+  const nextUiPasswordHash = incomingUiPassword
+    ? hashUiPassword(incomingUiPassword)
+    : currentUiPasswordHash;
+
+  if (requestedUiLockEnabled && !nextUiPasswordHash) {
+    throw new Error("启用登录保护时必须设置密码");
+  }
+
   const nextConfig = {
     apiKey: String(payload.apiKey || "").trim(),
     enabled: Boolean(payload.enabled) && Boolean(String(payload.apiKey || "").trim()),
+    uiLockEnabled: requestedUiLockEnabled,
+    uiPasswordHash: nextUiPasswordHash,
   };
   const filePath = securityFilePath(normalizedRoot);
 
@@ -175,6 +203,38 @@ async function saveSecurityConfig(projectRoot, payload, providedKey) {
     projectRoot: normalizedRoot.replace(/\\/g, "/"),
   };
   return activeSecurityConfig;
+}
+
+async function verifyUiLockPassword(projectRoot, password) {
+  const normalizedRoot = String(projectRoot || "").replace(/[\\/]+$/, "");
+  if (!normalizedRoot) {
+    throw new Error("projectRoot is required");
+  }
+
+  const currentConfig = await loadSecurityConfig(normalizedRoot);
+  if (!currentConfig.uiLockEnabled) {
+    return {
+      ok: true,
+      uiLockEnabled: false,
+    };
+  }
+
+  const hashed = hashUiPassword(password);
+  if (!hashed || hashed !== currentConfig.uiPasswordHash) {
+    throw new Error("登录密码错误");
+  }
+
+  const uiSessionToken = createUiSessionToken();
+  activeUiLockSessions.set(uiSessionToken, {
+    createdAt: new Date().toISOString(),
+    projectRoot: normalizedRoot.replace(/\\/g, "/"),
+  });
+
+  return {
+    ok: true,
+    uiSessionToken,
+    uiLockEnabled: true,
+  };
 }
 
 async function resolveSecurityConfigForPayload(payload) {
@@ -197,8 +257,33 @@ function extractProvidedApiKey(request, url = null) {
   return token?.trim() || "";
 }
 
+function extractProvidedUiSessionToken(request, url = null) {
+  const headerValue = request.headers["x-cclient-ui-token"];
+  if (typeof headerValue === "string" && headerValue.trim()) {
+    return headerValue.trim();
+  }
+
+  if (Array.isArray(headerValue) && headerValue[0]?.trim()) {
+    return headerValue[0].trim();
+  }
+
+  const token = url?.searchParams.get("ui_token");
+  return token?.trim() || "";
+}
+
 async function ensureAuthorizedRequest(request, payload, url = null) {
   const securityConfig = await resolveSecurityConfigForPayload(payload);
+  if (securityConfig.uiLockEnabled) {
+    const providedUiToken = extractProvidedUiSessionToken(request, url);
+    const activeUiSession = activeUiLockSessions.get(providedUiToken);
+    if (
+      !providedUiToken ||
+      !activeUiSession ||
+      normalizeComparablePath(activeUiSession.projectRoot) !== normalizeComparablePath(securityConfig.projectRoot)
+    ) {
+      throw new Error("ui lock required");
+    }
+  }
   if (!securityConfig.enabled) {
     return securityConfig;
   }
@@ -1533,7 +1618,7 @@ async function testCodexSettings(payload) {
 
 function writeJson(response, statusCode, payload) {
   response.writeHead(statusCode, {
-    "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key",
+    "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key, X-CClient-Ui-Token",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Origin": "*",
     "Content-Type": "application/json",
@@ -1543,7 +1628,7 @@ function writeJson(response, statusCode, payload) {
 
 function createCorsHeaders(extraHeaders = {}) {
   return {
-    "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key",
+    "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key, X-CClient-Ui-Token",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Origin": "*",
     ...extraHeaders,
@@ -4874,7 +4959,7 @@ const server = http.createServer((request, response) => {
 
   if (request.method === "OPTIONS") {
     response.writeHead(204, {
-      "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key",
+      "Access-Control-Allow-Headers": "Content-Type, X-CClient-Key, X-CClient-Ui-Token",
       "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
       "Access-Control-Allow-Origin": "*",
     });
@@ -4915,6 +5000,8 @@ const server = http.createServer((request, response) => {
         writeJson(response, 200, {
           enabled: result.enabled,
           filePath: result.filePath,
+          uiLockEnabled: result.uiLockEnabled,
+          uiPasswordSet: Boolean(result.uiPasswordHash),
         });
       } catch (error) {
         writeJson(response, 400, {
@@ -4941,10 +5028,31 @@ const server = http.createServer((request, response) => {
         writeJson(response, 200, {
           enabled: result.enabled,
           filePath: result.filePath,
+          uiLockEnabled: result.uiLockEnabled,
+          uiPasswordSet: Boolean(result.uiPasswordHash),
         });
       } catch (error) {
         writeJson(response, 400, {
           error: error instanceof Error ? error.message : "security save failed",
+        });
+      }
+    });
+    return;
+  }
+
+  if (request.method === "POST" && url.pathname === "/api/settings/security/verify-ui-lock") {
+    let body = "";
+    request.on("data", (chunk) => {
+      body += chunk;
+    });
+    request.on("end", async () => {
+      try {
+        const payload = JSON.parse(body || "{}");
+        const result = await verifyUiLockPassword(payload.projectRoot, payload.password);
+        writeJson(response, 200, result);
+      } catch (error) {
+        writeJson(response, 400, {
+          error: error instanceof Error ? error.message : "ui lock verify failed",
         });
       }
     });
