@@ -201,6 +201,50 @@ export function CodexSettingsPanel({
               </label>
             </div>
 
+            <div className="grid gap-4 md:grid-cols-3">
+              <label className="form-control gap-2">
+                <span className="label-text font-medium">审批策略</span>
+                <select
+                  className="select select-bordered"
+                  onChange={(event) => updateConfig({ approvalPolicy: event.target.value })}
+                  value={state.config.approvalPolicy}
+                >
+                  <option value="untrusted">untrusted</option>
+                  <option value="on-failure">on-failure</option>
+                  <option value="on-request">on-request</option>
+                  <option value="never">never</option>
+                </select>
+              </label>
+
+              <label className="form-control gap-2">
+                <span className="label-text font-medium">沙箱模式</span>
+                <select
+                  className="select select-bordered"
+                  onChange={(event) => updateConfig({ sandboxMode: event.target.value })}
+                  value={state.config.sandboxMode}
+                >
+                  <option value="read-only">read-only</option>
+                  <option value="workspace-write">workspace-write</option>
+                  <option value="danger-full-access">danger-full-access</option>
+                </select>
+              </label>
+
+              <label className="form-control gap-2">
+                <span className="label-text font-medium">Windows 沙箱</span>
+                <input
+                  className="input input-bordered"
+                  onChange={(event) => updateConfig({ windowsSandbox: event.target.value })}
+                  value={state.config.windowsSandbox}
+                />
+              </label>
+            </div>
+
+            <div className="alert alert-info">
+              <span>
+                `approval_policy` 控制命令执行前是否需要确认，`sandbox_mode` 控制 CLI 的文件系统/命令隔离级别，`[windows].sandbox` 用于 Windows 侧的运行模式兼容。
+              </span>
+            </div>
+
             <label className="form-control gap-2">
               <span className="label-text font-medium">Base URL</span>
               <input

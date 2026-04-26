@@ -138,6 +138,7 @@ function createInitialForm(
     repoSource: availableAgentDefinitions[0]?.repoSource ?? "",
     role: roleOptions[0],
     shell: defaults.defaultShell,
+    systemAgentEnabled: true,
     workspace: defaults.projectPath,
   };
 }
@@ -476,6 +477,26 @@ export function AddEmployeeModal({
                         自动信任员工工作空间
                         <span className="ml-2 text-xs text-base-content/60">
                           启动时遇到 Codex 的目录信任提示可自动继续
+                        </span>
+                      </span>
+                    </label>
+
+                    <label className="label cursor-pointer justify-start gap-3 rounded-box border border-base-300 bg-base-100 px-4 py-3">
+                      <input
+                        checked={form.systemAgentEnabled}
+                        className="toggle toggle-primary"
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            systemAgentEnabled: event.target.checked,
+                          }))
+                        }
+                        type="checkbox"
+                      />
+                      <span className="label-text">
+                        启用系统增强
+                        <span className="ml-2 text-xs text-base-content/60">
+                          开启后会把员工根目录的 EMPLOYEE_AGENT.md 覆写到项目空间 AGENTS.md；关闭后删除项目空间 AGENTS.md。
                         </span>
                       </span>
                     </label>

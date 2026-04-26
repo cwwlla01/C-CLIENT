@@ -8,7 +8,6 @@ import type {
   AgentStatus,
   RuntimeMember,
   RuntimeStatus,
-  TaskIntakeStatus,
   WorkStatus,
 } from "../data/mock-runtime";
 
@@ -83,32 +82,6 @@ const agentStatusMap: Record<AgentStatus, string> = {
   unverified: "待校验",
 };
 
-const intakeStatusMap: Record<
-  Exclude<TaskIntakeStatus, "none">,
-  { chip: string; text: string }
-> = {
-  pending_ack: {
-    chip: "badge-warning",
-    text: "待接单",
-  },
-  confirming: {
-    chip: "badge-secondary",
-    text: "确认中",
-  },
-  confirm_failed: {
-    chip: "badge-error",
-    text: "确认失败",
-  },
-  acknowledged: {
-    chip: "badge-info",
-    text: "已接单",
-  },
-  planned: {
-    chip: "badge-success",
-    text: "已排计划",
-  },
-};
-
 function extractArtifactReferences(detail: string) {
   return Array.from(String(detail).matchAll(/artifacts\/([^\s`，,]+)/gi))
     .map((match) => match[1]?.trim() ?? "")
@@ -156,18 +129,6 @@ function buildRuntimeSummary(member: RuntimeMember) {
     return "会话当前未运行，等待手动启动或新的任务指派。";
   }
 
-  if (member.taskIntakeStatus === "pending_ack") {
-    return "已收到新任务，正在等待员工确认并生成计划。";
-  }
-  if (member.taskIntakeStatus === "confirming") {
-    return "员工正在读取任务上下文并回写首轮确认。";
-  }
-  if (member.taskIntakeStatus === "confirm_failed") {
-    return "任务确认未成功，建议重试接单确认或进入终端排查。";
-  }
-  if (member.taskIntakeStatus === "planned") {
-    return "员工已完成任务拆解，接下来会按计划持续推进。";
-  }
   if (member.workStatus === "blocked") {
     return "会话仍在运行，但当前任务处于阻塞状态，需要人工关注。";
   }
@@ -213,6 +174,8 @@ type RuntimeDetailModalProps = {
   historyArtifacts: DeliveryHistoryEntry[];
   historyFinished: DeliveryHistoryEntry[];
   historyLoading: boolean;
+  inspectorLoading: boolean;
+  inspectorResult: RuntimeMember["inspector"];
   isRestarting: boolean;
   member: RuntimeMember | null;
   projectSpaces: ProjectSpaceEntry[];
@@ -223,10 +186,7 @@ type RuntimeDetailModalProps = {
   onDownloadProjectHistoryBundle: (workspacePath: string, projectName: string) => void;
   onOpenHistoryFile: (filePath: string) => void;
   onOpenHistoryFolder: (folderPath: string) => void;
-  onOpenPlanFile: (memberId: string) => void;
-  onOpenRestoreSummaryFile: (memberId: string) => void;
   onOpenRoleFile: (memberId: string) => void;
-  onOpenStartupAckFile: (memberId: string) => void;
   onOpenTaskRequestFile: (memberId: string) => void;
   onOpenWorkspaceRulesFile: (memberId: string) => void;
   onCopySessionId: (memberId: string) => void;
@@ -237,7 +197,8 @@ type RuntimeDetailModalProps = {
   onSwitchProjectSpace: (memberId: string, workspacePath: string) => void;
   onCompleteTask: (memberId: string) => void;
   onDeleteEmployee: (memberId: string) => Promise<boolean> | boolean;
-  onRetryStartupAck: (memberId: string) => void;
+  onSendInspectorReply: (memberId: string, replyText: string) => void;
+  onRunInspector: (memberId: string) => void;
   onRestartRuntime: (memberId: string) => void;
   onStopRuntime: (memberId: string) => void;
   onUpdateMemberSettings: (
@@ -256,6 +217,8 @@ export function RuntimeDetailModal({
   historyArtifacts,
   historyFinished,
   historyLoading,
+  inspectorLoading,
+  inspectorResult,
   isRestarting,
   member,
   projectSpaces,
@@ -266,10 +229,7 @@ export function RuntimeDetailModal({
   onDownloadProjectHistoryBundle,
   onOpenHistoryFile,
   onOpenHistoryFolder,
-  onOpenPlanFile,
-  onOpenRestoreSummaryFile,
   onOpenRoleFile,
-  onOpenStartupAckFile,
   onOpenTaskRequestFile,
   onOpenWorkspaceRulesFile,
   onCopySessionId,
@@ -280,7 +240,8 @@ export function RuntimeDetailModal({
   onSwitchProjectSpace,
   onCompleteTask,
   onDeleteEmployee,
-  onRetryStartupAck,
+  onSendInspectorReply,
+  onRunInspector,
   onRestartRuntime,
   onStopRuntime,
   onUpdateMemberSettings,
@@ -431,8 +392,6 @@ export function RuntimeDetailModal({
   const workTone = workToneMap[member.workStatus];
   const agentStatusLabel = agentStatusMap[member.agentStatus];
   const runtimeShellLabel = member.runtimeInfo?.resolvedShell ?? member.shell;
-  const intakeTone =
-    member.taskIntakeStatus !== "none" ? intakeStatusMap[member.taskIntakeStatus] : null;
   const queueCount = member.taskQueue.length;
   const runtimeStartedAt = formatDateTime(member.runtimeInfo?.startedAt);
   const runtimeStoppedAt = formatDateTime(member.runtimeInfo?.stoppedAt);
@@ -583,25 +542,16 @@ export function RuntimeDetailModal({
                       <button className="btn btn-outline btn-sm" onClick={() => onOpenTaskRequestFile(member.id)} type="button">
                         task_request.md
                       </button>
-                      <button className="btn btn-outline btn-sm" onClick={() => onOpenStartupAckFile(member.id)} type="button">
-                        startup_ack.md
-                      </button>
-                      <button className="btn btn-outline btn-sm" onClick={() => onOpenPlanFile(member.id)} type="button">
-                        plan.md
-                      </button>
                     </div>
                   </div>
                   <div className="card bg-base-100 p-3 shadow-none">
                     <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">上下文资料</p>
                     <div className="mt-3 flex flex-wrap gap-2">
                       <button className="btn btn-outline btn-sm" onClick={() => onOpenRoleFile(member.id)} type="button">
-                        ROLE.md
+                        EMPLOYEE_AGENT.md
                       </button>
                       <button className="btn btn-outline btn-sm" onClick={() => onOpenWorkspaceRulesFile(member.id)} type="button">
                         AGENTS.md
-                      </button>
-                      <button className="btn btn-outline btn-sm" onClick={() => onOpenRestoreSummaryFile(member.id)} type="button">
-                        restore_summary.md
                       </button>
                     </div>
                   </div>
@@ -711,9 +661,6 @@ export function RuntimeDetailModal({
                   {showWorkBadge ? (
                     <span className={`badge badge-outline ${workTone.chip}`}>{workTone.text}</span>
                   ) : null}
-                  {intakeTone ? (
-                    <span className={`badge badge-outline ${intakeTone.chip}`}>{intakeTone.text}</span>
-                  ) : null}
                   {member.recoveryPending ? (
                     <span className="badge badge-secondary badge-outline">待恢复</span>
                   ) : null}
@@ -729,13 +676,150 @@ export function RuntimeDetailModal({
                     <p className="mt-2 text-sm text-shell-text">{lastActionLabel}</p>
                   </div>
                 </div>
-                {(member.taskIntakeStatus === "pending_ack" || member.taskIntakeStatus === "confirm_failed") ? (
-                  <div className="mt-3">
-                    <button className="btn btn-outline btn-xs" onClick={() => onRetryStartupAck(member.id)} type="button">
-                      重试接单确认
-                    </button>
+              </section>
+
+              <section className="card bg-base-200 p-4 shadow-none">
+                <p className="text-xs uppercase tracking-[0.18em] text-shell-muted">观察结果</p>
+                {inspectorLoading ? (
+                  <div className="mt-3 text-sm text-shell-muted">观察者正在读取最近状态...</div>
+                ) : inspectorResult ? (
+                  <div className="mt-3 space-y-3">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="badge badge-outline rounded-md">
+                        {inspectorResult.taskState || "unknown"}
+                      </span>
+                      <span className="badge badge-outline rounded-md">
+                        {inspectorResult.verdict || "insufficient"}
+                      </span>
+                      {typeof inspectorResult.confidence === "number" ? (
+                        <span className="badge badge-outline rounded-md">
+                          置信度 {(inspectorResult.confidence * 100).toFixed(0)}%
+                        </span>
+                      ) : null}
+                      {inspectorResult.autoPilotDecision && inspectorResult.autoPilotDecision !== "none" ? (
+                        <span className="badge badge-info badge-outline rounded-md">
+                          {inspectorResult.autoPilotDecision}
+                        </span>
+                      ) : null}
+                      {inspectorResult.aiUsed ? (
+                        <span className="badge badge-secondary badge-outline rounded-md">
+                          AI 兜底
+                        </span>
+                      ) : null}
+                      {inspectorResult.replyCandidate?.type ? (
+                        <span className="badge badge-outline rounded-md">
+                          {inspectorResult.replyCandidate.type}
+                        </span>
+                      ) : null}
+                      {inspectorResult.replyCandidate?.riskLevel ? (
+                        <span className={`badge badge-outline rounded-md ${inspectorResult.replyCandidate.riskLevel === "low" ? "badge-success" : inspectorResult.replyCandidate.riskLevel === "medium" ? "badge-warning" : "badge-error"}`}>
+                          {inspectorResult.replyCandidate.riskLevel}
+                        </span>
+                      ) : null}
+                    </div>
+                    <div className="rounded-box border border-base-300 bg-base-100 px-3 py-3">
+                      <div className="flex flex-wrap gap-4 text-xs text-shell-muted">
+                        <span>
+                          结果来源：
+                          {inspectorResult.aiUsed
+                            ? inspectorResult.autoPilotDecision && inspectorResult.autoPilotDecision !== "none"
+                              ? "规则 + AI + 自动驾驶"
+                            : "规则 + AI"
+                          : inspectorResult.autoPilotDecision && inspectorResult.autoPilotDecision !== "none"
+                            ? "规则 + 自动驾驶"
+                            : "规则"}
+                      </span>
+                      <span>最近检查：{formatDateTime(inspectorResult.createdAt)}</span>
+                      {typeof inspectorResult.lastSilenceSeconds === "number" ? (
+                        <span>静默：{inspectorResult.lastSilenceSeconds}s</span>
+                      ) : null}
+                      {inspectorResult.lastAutoReplyAt ? (
+                        <span>最近自动回复：{formatDateTime(inspectorResult.lastAutoReplyAt)}</span>
+                      ) : null}
+                      </div>
+                      <p className="mt-3 text-sm leading-6 text-shell-text">
+                        {inspectorResult.summary || "暂无观察结果摘要"}
+                      </p>
+                    </div>
+                    {Array.isArray(inspectorResult.ruleMatches) && inspectorResult.ruleMatches.length > 0 ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">命中规则</p>
+                          <span className="badge badge-outline badge-sm">{inspectorResult.ruleMatches.length}</span>
+                        </div>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {inspectorResult.ruleMatches.map((rule) => (
+                            <span key={rule} className="badge badge-outline rounded-md">
+                              {rule}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    {Array.isArray(inspectorResult.risks) && inspectorResult.risks.length > 0 ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">风险</p>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-shell-text">
+                          {inspectorResult.risks.map((risk, index) => (
+                            <li key={`${risk}-${index}`}>{risk}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {inspectorResult.aiError ? (
+                      <div className="card bg-base-100 px-3 py-3 text-sm text-warning shadow-none">
+                        AI 兜底失败：{inspectorResult.aiError}
+                      </div>
+                    ) : null}
+                    {Array.isArray(inspectorResult.suggestions) && inspectorResult.suggestions.length > 0 ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">建议</p>
+                        <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-shell-text">
+                          {inspectorResult.suggestions.map((suggestion, index) => (
+                            <li key={`${suggestion}-${index}`}>{suggestion}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null}
+                    {Array.isArray(inspectorResult.targetFiles) && inspectorResult.targetFiles.length > 0 ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">目标文件</p>
+                        <div className="mt-2 flex flex-wrap gap-2">
+                          {inspectorResult.targetFiles.map((target) => {
+                            const matched = inspectorResult.matchedTargetFiles?.includes(target);
+                            return (
+                              <span key={target} className={`badge badge-outline rounded-md ${matched ? "badge-success" : "badge-warning"}`}>
+                                {target}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ) : null}
+                    {inspectorResult.replyCandidate?.suggestedReply ? (
+                      <div className="card bg-base-100 px-3 py-3 shadow-none">
+                        <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">建议回复</p>
+                        <p className="mt-2 text-sm text-shell-text">{inspectorResult.replyCandidate.suggestedReply}</p>
+                      </div>
+                    ) : null}
+                    <div className="flex flex-wrap gap-2">
+                      <button className="btn btn-outline btn-sm" onClick={() => onRunInspector(member.id)} type="button">
+                        重新检查
+                      </button>
+                      {inspectorResult.replyCandidate?.suggestedReply ? (
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => onSendInspectorReply(member.id, inspectorResult.replyCandidate?.suggestedReply || "")}
+                          type="button"
+                        >
+                          发送建议给员工
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                ) : null}
+                ) : (
+                  <div className="mt-3 text-sm text-shell-muted">当前还没有观察结果。</div>
+                )}
               </section>
 
               <section className="card bg-base-200 p-4 shadow-none">

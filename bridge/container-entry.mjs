@@ -1,3 +1,4 @@
+import "dotenv/config";
 import http from "node:http";
 import path from "node:path";
 import process from "node:process";

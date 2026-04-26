@@ -25,6 +25,25 @@
 - 首次启动引导里的 Codex 配置会写入容器内的 `~/.codex/config.toml` 和 `~/.codex/auth.json`
 - 如果你挂载了宿主机的 `~/.codex`，那么容器内保存的 Codex 配置会直接落回宿主机
 
+## 2.1 `.env` 说明
+
+项目根目录现在提供：
+
+- `.env.example`
+
+推荐做法：
+
+```bash
+cp .env.example .env
+```
+
+说明：
+
+- `docker compose` 会自动读取根目录 `.env`
+- `bridge/server.mjs` 和 `bridge/container-entry.mjs` 也会自动读取根目录 `.env`
+- `VITE_*` 变量仍然按 Vite 的原生规则生效
+- 如果同一个变量既在 shell 中显式导出，又写在 `.env`，通常以当前进程环境变量为准
+
 ## 3. 构建镜像
 
 当前 Dockerfile 已切换为多阶段构建：

@@ -47,6 +47,28 @@ export function RuntimeNode({ data, selected }: NodeProps<RuntimeFlowNode>) {
     data.taskPriority === "P0" ? data.taskPriority : null,
     data.taskDeadline ? `截止 ${data.taskDeadline}` : null,
   ].filter(Boolean);
+  const inspectorTone =
+    data.inspector?.autoPilotDecision === "auto_replied"
+      ? "badge-info"
+      : data.inspector?.taskState === "waiting_feedback"
+      ? "badge-success"
+      : data.inspector?.taskState === "blocked"
+        ? "badge-warning"
+        : data.inspector?.replyCandidate?.suggestedReply
+          ? "badge-info"
+          : "";
+  const inspectorLabel =
+    data.inspector?.autoPilotDecision === "auto_replied"
+      ? "已自动回复"
+      : (data.inspector?.missingTargetFiles?.length || 0) > 0
+        ? "缺目标文件"
+      : data.inspector?.taskState === "waiting_feedback"
+      ? "建议验收"
+      : data.inspector?.taskState === "blocked"
+        ? "需关注"
+        : data.inspector?.replyCandidate?.suggestedReply
+          ? "可建议回复"
+          : "";
 
   return (
     <div
@@ -84,6 +106,7 @@ export function RuntimeNode({ data, selected }: NodeProps<RuntimeFlowNode>) {
               {part}
             </span>
           ))}
+          {inspectorLabel ? <span className={`badge badge-outline rounded-md ${inspectorTone}`}>{inspectorLabel}</span> : null}
         </div>
       ) : null}
 

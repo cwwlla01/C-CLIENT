@@ -14,6 +14,30 @@ export type RuntimeAutomationSettings = {
 };
 
 export type RuntimeMember = {
+  inspector?: {
+    aiError?: string;
+    aiUsed?: boolean;
+    autoPilotDecision?: string;
+    confidence?: number;
+    createdAt?: string;
+    lastAutoReplyAt?: string | null;
+    lastSilenceSeconds?: number;
+    matchedTargetFiles?: string[];
+    missingTargetFiles?: string[];
+    replyCandidate?: {
+      riskLevel?: string;
+      suggestedReply?: string;
+      summary?: string;
+      type?: string;
+    } | null;
+    risks?: string[];
+    ruleMatches?: string[];
+    summary?: string;
+    targetFiles?: string[];
+    suggestions?: string[];
+    taskState?: string;
+    verdict?: string;
+  } | null;
   company: string;
   department: string;
   employeeCode: string;
@@ -87,6 +111,7 @@ export type NewEmployeeForm = {
   promptAutomation: PromptAutomationMode;
   role: string;
   shell: string;
+  systemAgentEnabled: boolean;
   permission: string;
   projectName: string;
   repoSource: string;

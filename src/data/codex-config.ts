@@ -1,4 +1,5 @@
 export type CodexConfigValues = {
+  approvalPolicy: string;
   baseUrl: string;
   disableResponseStorage: boolean;
   model: string;
@@ -9,7 +10,9 @@ export type CodexConfigValues = {
   networkAccess: string;
   providerName: string;
   reviewModel: string;
+  sandboxMode: string;
   wireApi: string;
+  windowsSandbox: string;
   windowsWslSetupAcknowledged: boolean;
 };
 
@@ -39,6 +42,7 @@ export type CodexSettingsState = {
 };
 
 export const defaultCodexConfigValues: CodexConfigValues = {
+  approvalPolicy: "never",
   baseUrl: "https://cpa.56781234.xyz/v1",
   disableResponseStorage: true,
   model: "gpt-5.4",
@@ -49,7 +53,9 @@ export const defaultCodexConfigValues: CodexConfigValues = {
   networkAccess: "enabled",
   providerName: "custom",
   reviewModel: "gpt-5.4",
+  sandboxMode: "danger-full-access",
   wireApi: "responses",
+  windowsSandbox: "unelevated",
   windowsWslSetupAcknowledged: true,
 };
 
@@ -68,9 +74,14 @@ export function buildDefaultCodexConfigToml(
     `model_reasoning_effort = "${config.modelReasoningEffort}"`,
     `disable_response_storage = ${config.disableResponseStorage ? "true" : "false"}`,
     `network_access = "${config.networkAccess}"`,
+    `approval_policy = "${config.approvalPolicy}"`,
+    `sandbox_mode = "${config.sandboxMode}"`,
     `windows_wsl_setup_acknowledged = ${config.windowsWslSetupAcknowledged ? "true" : "false"}`,
     `model_context_window = ${config.modelContextWindow}`,
     `model_auto_compact_token_limit = ${config.modelAutoCompactTokenLimit}`,
+    "",
+    "[windows]",
+    `sandbox = "${config.windowsSandbox}"`,
     "",
     "[model_providers.custom]",
     `name = "${config.providerName}"`,

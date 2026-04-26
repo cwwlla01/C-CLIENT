@@ -58,6 +58,11 @@
 - 支持表单方式编辑以下配置：
   - `config.toml`
   - `auth.json`
+- 表单配置现已覆盖：
+  - 模型与提供方
+  - 推理强度与网络访问
+  - 审批策略与沙箱模式
+  - Windows 沙箱兼容项
 - 默认写入位置：
   - `{CODEX_HOME}/config.toml`
   - `{CODEX_HOME}/auth.json`
@@ -65,11 +70,13 @@
 - 支持连通性测试
 - 支持 `config.toml` 源文件开发者编辑模式
 - 项目空间现在采用：
-  - `AGENTS.md` 作为长期规则
-  - `ROLE.md` 作为员工角色快照
-- `AGENTS.md` 模板保存在：
-  - `{项目路径}/setting/templates/AGENTS.md`
-- 初始化项目空间时会自动复制模板到当前项目空间
+  - 员工根目录保留 `EMPLOYEE_AGENT.md`
+  - 项目空间按员工级开关生成 `AGENTS.md`
+- `EMPLOYEE_AGENT.md` 作为员工模板唯一真相源
+- 启用系统增强时：
+  - 从员工根目录的 `EMPLOYEE_AGENT.md` 覆写到项目空间 `AGENTS.md`
+- 关闭系统增强时：
+  - 删除项目空间 `AGENTS.md`
 - 已通过真实 `codex exec` 验证项目空间内的 `AGENTS.md` 会生效
 
 ## 当前目录模型
@@ -77,9 +84,9 @@
 当前客户端已经开始从“一个员工对应一个项目空间”过渡到“两层模型”：
 
 1. 员工根目录
-   - 保存员工画像、`ROLE.md`、当前激活项目、跨项目队列、成果索引
+  - 保存员工画像、`EMPLOYEE_AGENT.md`、`projects.json`、`deliveries-index.json`
 2. 项目工作空间
-   - 保存某个具体项目的 `AGENTS.md / ROLE.md / current.md / plan.md / task_request.md / references/ / artifacts/`
+  - 保存某个具体项目的 `AGENTS.md / task_request.md / runtime/meta.json / references/ / artifacts/`
 
 这样做的目标是：
 
@@ -96,6 +103,7 @@
 - [Docker / Podman 运行说明](./docs/docker-podman.md)
 - [客户端运行时架构](./docs/client-runtime-architecture.md)
 - [员工 Codex 运行时设计](./docs/employee-codex-runtime.md)
+- [观察者 Inspector 设计稿](./docs/inspector-scheduler.md)
 - [运行时协议](./docs/runtime-protocol.md)
 - [UI 风格规范](./docs/ui-style-guide.md)
 
@@ -139,6 +147,33 @@ npm run bridge
 1. 先完成 Codex 配置和连通性测试
 2. 再创建第一个员工
 3. 最后发布第一条任务验证完整链路
+
+## 环境变量
+
+项目现在支持根目录 `.env` 配置。
+
+推荐做法：
+
+```bash
+cp .env.example .env
+```
+
+说明：
+
+- Vite 会自动读取 `.env` 中的 `VITE_*` 变量
+- `bridge/server.mjs` 与 `bridge/container-entry.mjs` 现在也会自动读取根目录 `.env`
+- 本地开发最常用的是：
+  - `CCLIENT_BRIDGE_HOST`
+  - `CCLIENT_BRIDGE_PORT`
+  - `VITE_DEFAULT_PROJECT_PATH`
+  - `VITE_BRIDGE_HOST`
+  - `VITE_BRIDGE_PORT`
+- 线上如果要让外部浏览器访问 bridge，通常需要：
+  - `CCLIENT_BRIDGE_HOST=0.0.0.0`
+
+`.env.example` 已包含默认示例和注释：
+
+- [`.env.example`](./.env.example)
 
 ## 容器运行
 

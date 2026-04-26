@@ -1,102 +1,52 @@
-# MVP 交付说明
+# MVP 交接说明
 
-## 1. 当前交付范围
+## 当前实现结论
 
-本次 `C-CLIENT` MVP 已完成以下主线：
+本版本已经从“重 markdown 工作流”切到“轻运行时宿主”模型。
 
-- 员工 CLI 本地运行时宿主
-- 首次启动引导
-- 员工级项目空间与项目切换骨架
-- 员工详情弹窗 4 个视角：
-  - 员工信息
-  - 运行情况
-  - 工作成果
-  - 项目空间
-- 工作成果员工级聚合
-- 审核消息中心
-- 提示白名单
-- 可选开启的本地 API Key 鉴权
-- Codex 配置读写与测试
-- 本地 REST / WebSocket API 文档
+## 交接重点
 
-## 2. 当前关键能力
+### 1. 任务直达 Codex
 
-### 员工与项目空间
+- 系统不再发送解释性 prompt
+- 有任务时只发送用户原文
+- 有附件时只补文件路径
 
-- 创建员工会初始化项目空间和员工根目录元数据
-- 删除员工会直接删除整个员工根目录，并先停止对应 CLI 会话
-- 员工根目录维护：
-  - `employee.json`
-  - `current-project.json`
-  - `dispatch-queue.json`
-  - `deliveries-index.json`
+### 2. 状态旁路化
 
-### CLI 运行时
+- 运行态：`runtime/meta.json`
+- 项目态：`projects.json`
+- 成果态：`deliveries-index.json`
 
-- 支持启动、停止、重启
-- 优先使用 Codex 模式启动
-- 能识别并处理常见的目录信任与继续执行提示
-- 已支持读取和保存 `~/.codex` 下的 `config.toml` 与 `auth.json`
-- 已支持从 UI 对 Codex 配置做连通性测试
+### 3. 旧流程退出主链路
 
-### 多项目
+以下文件不再是主流程必需项：
 
-- 发布任务支持指定项目名
-- 跨项目发布支持：
-  - 空闲态直接切项目
-  - 忙碌态进入员工级切换队列
-- 项目空间 tab 能展示该员工名下全部项目
-- 工作成果按项目分组
-- 工作成果支持：
-  - 下载单文件
-  - 下载项目成果包
-  - 下载员工全部成果包
+- `startup_ack.md`
+- `plan.md`
+- `current.md`
+- `wait_finished.md`
+- `finished.md`
+- `block.md`
+- `restore_summary.md`
 
-### 审核与自动化
+## 当前仍然需要关注
 
-- 审核消息可集中处理提示
-- 提示白名单支持“文本包含 -> 固定回复”
-- 运行策略支持：
-  - 权限模式
-  - 提示自动化
-  - 提权处理
-  - 自动信任工作空间
+1. 文档是否完全同步
+2. 前端展示是否完全转到新状态模型
+3. 是否继续删除 bridge 内剩余兼容函数
 
-### 安全
+## 建议交接后第一步
 
-- 本地 REST API 支持 `X-CClient-Key`
-- 本地 `/terminal` WebSocket 支持 `token`
-- 配置文件：
-  - `{项目路径}/setting/security.json`
-
-### 首次引导
-
-- 当前引导分 3 步：
-  - 配置 Codex
-  - 创建第一个员工
-  - 发布第一条任务
-- 只要引导未完成，后续打开客户端仍会继续提示
-- 设置菜单支持重新打开引导
-
-## 3. 主要文档
-
-- `docs/mvp-current-state.md`
-- `docs/local-api-reference.md`
-- `docs/client-runtime-architecture.md`
-- `docs/employee-codex-runtime.md`
-
-## 4. 当前已知限制
-
-- 服务端尚未真正接入
-- Codex 测试目前只覆盖 `/models` 连通性，不覆盖真实任务执行全链路
-- 审核消息日志当前是内存态
-- 提示白名单第一版不支持正则、作用域和优先级
-- 项目空间 tab 当前只支持打开目录和切换项目，还未支持更细的项目级操作
-- 仍是单员工单主会话模型，不支持同一员工多项目并发 CLI
-
-## 5. 推荐下一步
-
-1. 审核消息日志持久化
-2. 提示白名单支持作用域和优先级
-3. 项目空间 tab 增加项目级成果跳转和更多控制动作
-4. 服务端接入真实同步协议
+1. 跑一次 `npm run build`
+2. 启动本地 bridge / UI
+3. 实测：
+   - 新增员工
+   - 发布任务
+   - 启动终端
+   - 完成任务
+4. 核对：
+   - `task_request.md`
+   - `runtime/meta.json`
+   - `projects.json`
+   - `deliveries-index.json`

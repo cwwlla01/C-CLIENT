@@ -52,7 +52,7 @@
     "source_type": "github",
     "source": "https://github.com/org/repo",
     "ref": "a1b2c3d4",
-    "entry": "roles/frontend/ROLE.md",
+    "entry": "employee/EMPLOYEE_AGENT.md",
     "fingerprint": "sha256:xxxx"
   },
   "restore": {

@@ -3,9 +3,13 @@ type PendingPromptItem = {
   id: string;
   memberId: string;
   memberLabel: string;
+  replyRiskLevel?: string;
+  replyType?: string;
+  replyText?: string;
   responseMode: "approve_reject" | "continue_only" | "notify_only";
   summary: string;
   title: string;
+  type?: string;
   workspacePath: string;
 };
 
@@ -94,8 +98,33 @@ export function PendingPromptsModal({
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="text-base font-semibold text-shell-text">{prompt.title}</p>
                               <span className="badge badge-outline badge-sm">{prompt.memberLabel}</span>
+                              {String(prompt.type || "").startsWith("inspector_suggestion:") ? (
+                                <span className="badge badge-info badge-outline badge-sm">观察者建议</span>
+                              ) : null}
+                              {String(prompt.type || "").startsWith("inspector_suggestion:") ? (
+                                <span className="badge badge-secondary badge-outline badge-sm">规则来源</span>
+                              ) : null}
+                              {prompt.replyType ? (
+                                <span className="badge badge-outline badge-sm">{prompt.replyType}</span>
+                              ) : null}
+                              {prompt.replyRiskLevel ? (
+                                <span className={`badge badge-outline badge-sm ${prompt.replyRiskLevel === "low" ? "badge-success" : prompt.replyRiskLevel === "medium" ? "badge-warning" : "badge-error"}`}>
+                                  {prompt.replyRiskLevel}
+                                </span>
+                              ) : null}
                             </div>
                             <p className="text-sm text-shell-text">{prompt.summary}</p>
+                            {prompt.replyText ? (
+                              <div className="mt-2 rounded-box border border-base-300 bg-base-200 px-3 py-2">
+                                <div className="flex items-center justify-between gap-3">
+                                  <p className="text-[11px] uppercase tracking-[0.16em] text-shell-muted">建议回复</p>
+                                  {prompt.replyType ? (
+                                    <span className="badge badge-outline badge-sm">{prompt.replyType}</span>
+                                  ) : null}
+                                </div>
+                                <p className="mt-1 text-sm text-shell-text">{prompt.replyText}</p>
+                              </div>
+                            ) : null}
                             <p className="text-xs text-shell-muted">
                               工作空间：{prompt.workspacePath}
                             </p>
@@ -113,14 +142,14 @@ export function PendingPromptsModal({
                                 onClick={() => onRespond(prompt.id, "approve")}
                                 type="button"
                               >
-                                批准
+                                {String(prompt.type || "").startsWith("inspector_suggestion:") ? "采纳建议" : "批准"}
                               </button>
                               <button
                                 className="btn btn-outline btn-sm"
                                 onClick={() => onRespond(prompt.id, "reject")}
                                 type="button"
                               >
-                                拒绝
+                                {String(prompt.type || "").startsWith("inspector_suggestion:") ? "忽略建议" : "拒绝"}
                               </button>
                             </>
                           ) : null}

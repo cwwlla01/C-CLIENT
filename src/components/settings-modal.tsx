@@ -11,8 +11,9 @@ import {
   promptRuleActionOptions,
   type PromptRule,
 } from "../data/prompt-rules";
+import type { InspectorSettings } from "../data/inspector-config";
 
-type SettingsTab = "system" | "codex" | "theme" | "rules";
+type SettingsTab = "system" | "codex" | "inspector" | "theme" | "rules";
 
 export type AppSettings = {
   agentRepoUrl: string;
@@ -44,8 +45,11 @@ type SettingsModalProps = {
   onCodexConfigChange: (patch: Partial<CodexConfigValues>) => void;
   onCodexConfigTomlChange: (next: string) => void;
   onGenerateApiKey: () => void;
+  onInspectorSettingsChange: (next: InspectorSettings) => void;
   onSaveApiSecurity: () => void;
   onSaveCodexSettings: () => void;
+  onSaveInspectorSettings: () => void;
+  onTestInspectorSettings: () => void;
   onClose: () => void;
   onAddPromptRule: () => void;
   onDeletePromptRule: (ruleId: string) => void;
@@ -55,6 +59,18 @@ type SettingsModalProps = {
   onTestCodexSettings: () => void;
   onSyncRepo: () => void;
   codexSettingsState: CodexSettingsState;
+  inspectorSettingsState: {
+    error: string;
+    filePath: string;
+    loading: boolean;
+    saving: boolean;
+    settings: InspectorSettings;
+    testError: string;
+    testLatencyMs: number | null;
+    testMessage: string;
+    testModels: string[];
+    testing: boolean;
+  };
   open: boolean;
   promptRulesState: {
     error: string;
@@ -77,13 +93,17 @@ type SettingsModalProps = {
 export function SettingsModal({
   apiSecurityState,
   codexSettingsState,
+  inspectorSettingsState,
   onApiSecurityChange,
   onCodexAuthChange,
   onCodexConfigChange,
   onCodexConfigTomlChange,
   onGenerateApiKey,
+  onInspectorSettingsChange,
   onSaveApiSecurity,
   onSaveCodexSettings,
+  onSaveInspectorSettings,
+  onTestInspectorSettings,
   onClose,
   onAddPromptRule,
   onDeletePromptRule,
@@ -141,6 +161,13 @@ export function SettingsModal({
               type="button"
             >
               Codex 配置
+            </button>
+            <button
+              className={`tab ${activeTab === "inspector" ? "tab-active" : ""}`}
+              onClick={() => setActiveTab("inspector")}
+              type="button"
+            >
+              观察者配置
             </button>
             <button
               className={`tab ${activeTab === "theme" ? "tab-active" : ""}`}
@@ -443,6 +470,204 @@ export function SettingsModal({
                 onTest={onTestCodexSettings}
                 state={codexSettingsState}
               />
+            ) : null}
+
+            {activeTab === "inspector" ? (
+              <div className="grid gap-5 xl:grid-cols-2">
+                <div className="card border border-base-300 bg-base-100 shadow-sm">
+                  <div className="card-body gap-4">
+                    <h3 className="card-title text-lg">观察者模式</h3>
+
+                    <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3">
+                      <div>
+                        <span className="label-text font-medium">启用观察者</span>
+                        <p className="mt-1 text-xs text-base-content/60">后台异步检查员工会话状态并输出建议。</p>
+                      </div>
+                      <input
+                        checked={inspectorSettingsState.settings.enabled}
+                        className="toggle toggle-primary"
+                        onChange={(event) =>
+                          onInspectorSettingsChange({
+                            ...inspectorSettingsState.settings,
+                            enabled: event.target.checked,
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">检查模式</span>
+                        <select
+                          className="select select-bordered"
+                          onChange={(event) =>
+                            onInspectorSettingsChange({
+                              ...inspectorSettingsState.settings,
+                              inspectionMode: event.target.value as InspectorSettings["inspectionMode"],
+                            })
+                          }
+                          value={inspectorSettingsState.settings.inspectionMode}
+                        >
+                          <option value="rules_only">仅规则</option>
+                          <option value="hybrid">规则 + AI</option>
+                          <option value="ai_only">仅 AI</option>
+                        </select>
+                      </label>
+
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">自动驾驶模式</span>
+                        <select
+                          className="select select-bordered"
+                          onChange={(event) =>
+                            onInspectorSettingsChange({
+                              ...inspectorSettingsState.settings,
+                              autopilotMode: event.target.value as InspectorSettings["autopilotMode"],
+                            })
+                          }
+                          value={inspectorSettingsState.settings.autopilotMode}
+                        >
+                          <option value="off">关闭</option>
+                          <option value="suggest_only">仅建议</option>
+                          <option value="safe_auto">安全自动</option>
+                          <option value="full_auto">全自动</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3">
+                      <div>
+                        <span className="label-text font-medium">启用自动回复</span>
+                        <p className="mt-1 text-xs text-base-content/60">对白名单问题自动回填选择或确认。</p>
+                      </div>
+                      <input
+                        checked={inspectorSettingsState.settings.autoReplyEnabled}
+                        className="toggle toggle-primary"
+                        onChange={(event) =>
+                          onInspectorSettingsChange({
+                            ...inspectorSettingsState.settings,
+                            autoReplyEnabled: event.target.checked,
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+
+                    <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3">
+                      <div>
+                        <span className="label-text font-medium">高风险始终人工确认</span>
+                        <p className="mt-1 text-xs text-base-content/60">删除、覆盖、发布等操作不允许自动驾驶直接回复。</p>
+                      </div>
+                      <input
+                        checked={inspectorSettingsState.settings.highRiskAlwaysManual}
+                        className="toggle toggle-primary"
+                        onChange={(event) =>
+                          onInspectorSettingsChange({
+                            ...inspectorSettingsState.settings,
+                            highRiskAlwaysManual: event.target.checked,
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+                  </div>
+                </div>
+
+                <div className="card border border-base-300 bg-base-100 shadow-sm">
+                  <div className="card-body gap-4">
+                    <h3 className="card-title text-lg">规则阈值与偏好</h3>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">静默秒数</span>
+                        <input className="input input-bordered" min={5} type="number" value={inspectorSettingsState.settings.thresholds.silenceSeconds} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, thresholds: { ...inspectorSettingsState.settings.thresholds, silenceSeconds: Number(event.target.value || 0) } })} />
+                      </label>
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">完成分数阈值</span>
+                        <input className="input input-bordered" min={1} type="number" value={inspectorSettingsState.settings.thresholds.completionScore} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, thresholds: { ...inspectorSettingsState.settings.thresholds, completionScore: Number(event.target.value || 0) } })} />
+                      </label>
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">阻塞分数阈值</span>
+                        <input className="input input-bordered" min={1} type="number" value={inspectorSettingsState.settings.thresholds.blockedScore} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, thresholds: { ...inspectorSettingsState.settings.thresholds, blockedScore: Number(event.target.value || 0) } })} />
+                      </label>
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">自动回复阈值</span>
+                        <input className="input input-bordered" min={1} type="number" value={inspectorSettingsState.settings.thresholds.autoReplyScore} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, thresholds: { ...inspectorSettingsState.settings.thresholds, autoReplyScore: Number(event.target.value || 0) } })} />
+                      </label>
+                    </div>
+
+                    <div className="grid gap-3">
+                      <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3"><span className="label-text">偏保守决策</span><input checked={inspectorSettingsState.settings.preferences.preferConservative} className="toggle toggle-primary" onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, preferences: { ...inspectorSettingsState.settings.preferences, preferConservative: event.target.checked } })} type="checkbox" /></label>
+                      <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3"><span className="label-text">偏继续执行</span><input checked={inspectorSettingsState.settings.preferences.preferContinue} className="toggle toggle-primary" onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, preferences: { ...inspectorSettingsState.settings.preferences, preferContinue: event.target.checked } })} type="checkbox" /></label>
+                      <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3"><span className="label-text">偏非破坏性操作</span><input checked={inspectorSettingsState.settings.preferences.preferNonDestructive} className="toggle toggle-primary" onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, preferences: { ...inspectorSettingsState.settings.preferences, preferNonDestructive: event.target.checked } })} type="checkbox" /></label>
+                      <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3"><span className="label-text">A/B 默认偏向 A</span><input checked={inspectorSettingsState.settings.preferences.preferOptionA} className="toggle toggle-primary" onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, preferences: { ...inspectorSettingsState.settings.preferences, preferOptionA: event.target.checked } })} type="checkbox" /></label>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="card border border-base-300 bg-base-100 shadow-sm xl:col-span-2">
+                  <div className="card-body gap-4">
+                    <h3 className="card-title text-lg">AI 兜底配置</h3>
+
+                    <label className="label cursor-pointer justify-between rounded-box border border-base-300 px-4 py-3">
+                      <div>
+                        <span className="label-text font-medium">启用独立 Inspector API</span>
+                        <p className="mt-1 text-xs text-base-content/60">仅在混合或纯 AI 模式下调用，建议配置便宜模型。</p>
+                      </div>
+                      <input
+                        checked={inspectorSettingsState.settings.ai.enabled}
+                        className="toggle toggle-primary"
+                        onChange={(event) =>
+                          onInspectorSettingsChange({
+                            ...inspectorSettingsState.settings,
+                            ai: {
+                              ...inspectorSettingsState.settings.ai,
+                              enabled: event.target.checked,
+                            },
+                          })
+                        }
+                        type="checkbox"
+                      />
+                    </label>
+
+                    <div className="grid gap-4 md:grid-cols-2">
+                      <label className="form-control gap-2"><span className="label-text font-medium">Base URL</span><input className="input input-bordered" placeholder="https://xxx/v1" value={inspectorSettingsState.settings.ai.baseUrl} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, ai: { ...inspectorSettingsState.settings.ai, baseUrl: event.target.value } })} /></label>
+                      <label className="form-control gap-2"><span className="label-text font-medium">API Key</span><input className="input input-bordered" placeholder="sk-..." type="password" value={inspectorSettingsState.settings.ai.apiKey} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, ai: { ...inspectorSettingsState.settings.ai, apiKey: event.target.value } })} /></label>
+                      <label className="form-control gap-2"><span className="label-text font-medium">模型</span><input className="input input-bordered" value={inspectorSettingsState.settings.ai.model} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, ai: { ...inspectorSettingsState.settings.ai, model: event.target.value } })} /></label>
+                      <label className="form-control gap-2">
+                        <span className="label-text font-medium">推理强度</span>
+                        <select className="select select-bordered" value={inspectorSettingsState.settings.ai.reasoningEffort} onChange={(event) => onInspectorSettingsChange({ ...inspectorSettingsState.settings, ai: { ...inspectorSettingsState.settings.ai, reasoningEffort: event.target.value as InspectorSettings["ai"]["reasoningEffort"] } })}>
+                          <option value="low">low</option>
+                          <option value="medium">medium</option>
+                          <option value="high">high</option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <div className="text-xs text-base-content/60">配置文件：{inspectorSettingsState.filePath || `${settings.projectPath}/setting/inspector.json`}</div>
+                    {inspectorSettingsState.error ? <div className="alert alert-error"><span>{inspectorSettingsState.error}</span></div> : null}
+                    {inspectorSettingsState.testError ? (
+                      <div className="alert alert-error"><span>{inspectorSettingsState.testError}</span></div>
+                    ) : null}
+                    {inspectorSettingsState.testMessage ? (
+                      <div className="alert alert-success">
+                        <span>
+                          {inspectorSettingsState.testMessage}
+                          {typeof inspectorSettingsState.testLatencyMs === "number" ? ` · ${inspectorSettingsState.testLatencyMs}ms` : ""}
+                        </span>
+                      </div>
+                    ) : null}
+                    <div className="flex justify-end gap-3">
+                      <button className={`btn btn-outline ${inspectorSettingsState.testing ? "loading" : ""}`} onClick={onTestInspectorSettings} type="button">
+                        {inspectorSettingsState.testing ? "测试中" : "测试 Inspector AI"}
+                      </button>
+                      <button className={`btn btn-primary ${inspectorSettingsState.saving ? "loading" : ""}`} onClick={onSaveInspectorSettings} type="button">
+                        {inspectorSettingsState.saving ? "保存中" : "保存观察者配置"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
             ) : null}
 
             {activeTab === "theme" ? (

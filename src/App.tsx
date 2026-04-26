@@ -36,6 +36,10 @@ import {
   createEmptyPromptRule,
   type PromptRule,
 } from "./data/prompt-rules";
+import {
+  createDefaultInspectorSettings,
+  type InspectorSettings,
+} from "./data/inspector-config";
 import { daisyThemeOptions, type DaisyThemeName } from "./data/theme-options";
 import {
   createDefaultCodexSettingsState,
@@ -166,6 +170,19 @@ type PromptRulesState = {
   saving: boolean;
 };
 
+type InspectorSettingsState = {
+  error: string;
+  filePath: string;
+  loading: boolean;
+  saving: boolean;
+  settings: InspectorSettings;
+  testError: string;
+  testLatencyMs: number | null;
+  testMessage: string;
+  testModels: string[];
+  testing: boolean;
+};
+
 function loadSettings(): AppSettings {
   try {
     const raw = window.localStorage.getItem(SETTINGS_STORAGE_KEY);
@@ -230,6 +247,7 @@ type DiscoveredRuntime = {
   department?: string;
   employeeCode: string;
   employeeName: string;
+  inspector?: RuntimeMember["inspector"];
   nextAction?: string;
   memberId?: string;
   permission: string;
@@ -524,6 +542,7 @@ function memberFromDiscoveredRuntime(runtime: DiscoveredRuntime): RuntimeMember 
     employeeCode: runtime.employeeCode || "UNKNOWN",
     heartbeatLabel: heartbeatLabelFromRuntime(runtime),
     id: buildRecoveredMemberId(runtime),
+    inspector: runtime.inspector ?? null,
     name: runtime.employeeName,
     nextAction: runtime.nextAction ?? "暂无",
     permission: runtime.permission,
@@ -602,6 +621,13 @@ function App() {
     items: [],
     loading: false,
   });
+  const [detailInspector, setDetailInspector] = useState<{
+    loading: boolean;
+    result: RuntimeMember["inspector"];
+  }>({
+    loading: false,
+    result: null,
+  });
   const [settings, setSettings] = useState<AppSettings>(() =>
     typeof window === "undefined" ? defaultSettings : loadSettings(),
   );
@@ -636,6 +662,18 @@ function App() {
     loading: false,
     rules: [],
     saving: false,
+  });
+  const [inspectorSettingsState, setInspectorSettingsState] = useState<InspectorSettingsState>({
+    error: "",
+    filePath: "",
+    loading: false,
+    saving: false,
+    settings: createDefaultInspectorSettings(),
+    testError: "",
+    testLatencyMs: null,
+    testMessage: "",
+    testModels: [],
+    testing: false,
   });
   const [pendingPrompts, setPendingPrompts] = useState<PendingPrompt[]>([]);
   const [promptHandlingLogs, setPromptHandlingLogs] = useState<PromptHandlingLog[]>([]);
@@ -857,6 +895,47 @@ function App() {
     }
   }, [settings.projectPath]);
 
+  const loadInspectorSettings = useCallback(async () => {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      error: "",
+      loading: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/inspector/load"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          projectRoot: settings.projectPath,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "观察者配置加载失败");
+      }
+
+      setInspectorSettingsState({
+        error: "",
+        filePath: payload.filePath ?? "",
+        loading: false,
+        saving: false,
+        settings: payload.settings ?? createDefaultInspectorSettings(),
+        testError: "",
+        testLatencyMs: null,
+        testMessage: "",
+        testModels: [],
+        testing: false,
+      });
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "观察者配置加载失败",
+        loading: false,
+      }));
+    }
+  }, [getBridgeHeaders, settings.projectPath]);
+
   const loadApiSecurity = useCallback(async () => {
     try {
       const response = await fetch(buildBridgeUrl("/api/settings/security/load"), {
@@ -934,10 +1013,11 @@ function App() {
       return;
     }
 
+    void loadInspectorSettings();
     void loadPromptRules();
     void loadApiSecurity();
     void loadCodexSettings();
-  }, [loadApiSecurity, loadCodexSettings, loadPromptRules, settingsOpen]);
+  }, [loadApiSecurity, loadCodexSettings, loadInspectorSettings, loadPromptRules, settingsOpen]);
 
   useEffect(() => {
     if (!onboardingOpen) {
@@ -1284,6 +1364,10 @@ function App() {
         items: [],
         loading: false,
       });
+      setDetailInspector({
+        loading: false,
+        result: null,
+      });
       return;
     }
 
@@ -1334,6 +1418,55 @@ function App() {
       cancelled = true;
     };
   }, [detailHistoryRefreshToken, detailMember?.workspace]);
+
+  useEffect(() => {
+    if (!detailMember?.workspace) {
+      return;
+    }
+
+    let cancelled = false;
+    setDetailInspector({
+      loading: true,
+      result: null,
+    });
+
+    fetch(buildBridgeUrl("/api/employee/status"), {
+      method: "POST",
+      headers: getBridgeHeaders(),
+      body: JSON.stringify({
+        workspacePath: detailMember.workspace,
+      }),
+    })
+      .then(async (response) => {
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "观察结果加载失败");
+        }
+        return payload;
+      })
+      .then((payload) => {
+        if (cancelled) {
+          return;
+        }
+        setDetailInspector({
+          loading: false,
+          result: payload.status?.inspector ?? null,
+        });
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+        setDetailInspector({
+          loading: false,
+          result: null,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [detailHistoryRefreshToken, detailMember?.workspace, getBridgeHeaders]);
 
   useEffect(() => {
     if (!detailMember?.workspace) {
@@ -1895,42 +2028,6 @@ function App() {
     [findMemberById, handleRestartRuntime, handleStartRuntime, updateMember],
   );
 
-  const handleRetryStartupAck = useCallback(
-    async (memberId: string) => {
-      const member = findMemberById(memberId);
-      if (!member) {
-        setWorkspaceError("未找到目标员工");
-        return;
-      }
-
-      try {
-        const response = await fetch(buildBridgeUrl("/api/task/retry-startup-ack"), {
-          method: "POST",
-          headers: getBridgeHeaders(),
-          body: JSON.stringify({
-            permission: member.permission,
-            shell: member.shell,
-            workspacePath: member.workspace,
-          }),
-        });
-
-        const payload = await response.json();
-        if (!response.ok) {
-          throw new Error(payload.error || "重试接单确认失败");
-        }
-
-        updateMember(memberId, (current) => ({
-          ...current,
-          taskIntakeStatus: "confirming",
-        }));
-        setWorkspaceMessage(`已开始重试 ${member.name} 的接单确认`);
-      } catch (error) {
-        setWorkspaceError(error instanceof Error ? error.message : "重试接单确认失败");
-      }
-    },
-    [findMemberById, updateMember],
-  );
-
   const handleCompleteTask = useCallback(
     async (memberId: string) => {
       const member = findMemberById(memberId);
@@ -1984,6 +2081,73 @@ function App() {
       .then(() => setWorkspaceMessage(`已复制${label}`))
       .catch(() => setWorkspaceError(`复制${label}失败`));
   }, []);
+
+  const handleRunInspector = useCallback(
+    async (memberId: string) => {
+      const member = findMemberById(memberId);
+      if (!member) {
+        setWorkspaceError("未找到目标员工");
+        return;
+      }
+
+      try {
+        const response = await fetch(buildBridgeUrl("/api/inspector/review"), {
+          method: "POST",
+          headers: getBridgeHeaders(),
+          body: JSON.stringify({
+            memberId,
+            workspacePath: member.workspace,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "观察者检查失败");
+        }
+        setDetailInspector({
+          loading: false,
+          result: payload.result ?? null,
+        });
+        setWorkspaceMessage("观察者已重新检查当前员工");
+        await refreshWorkspaceNodes({ silent: true });
+      } catch (error) {
+        setWorkspaceError(error instanceof Error ? error.message : "观察者检查失败");
+      }
+    },
+    [findMemberById, getBridgeHeaders, refreshWorkspaceNodes],
+  );
+
+  const handleSendInspectorReply = useCallback(
+    async (memberId: string, replyText: string) => {
+      const member = findMemberById(memberId);
+      if (!member) {
+        setWorkspaceError("未找到目标员工");
+        return;
+      }
+
+      try {
+        const response = await fetch(buildBridgeUrl("/api/inspector/reply"), {
+          method: "POST",
+          headers: getBridgeHeaders(),
+          body: JSON.stringify({
+            memberId,
+            replyText,
+            workspacePath: member.workspace,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          throw new Error(payload.error || "发送建议失败");
+        }
+        setWorkspaceMessage(`已发送建议给 ${member.name}`);
+        await refreshPendingPrompts();
+        await refreshWorkspaceNodes({ silent: true });
+        setDetailHistoryRefreshToken((current) => current + 1);
+      } catch (error) {
+        setWorkspaceError(error instanceof Error ? error.message : "发送建议失败");
+      }
+    },
+    [findMemberById, getBridgeHeaders, refreshPendingPrompts, refreshWorkspaceNodes],
+  );
 
   const requestOpenLocalPath = useCallback(
     async (targetPath: string) => {
@@ -2099,38 +2263,31 @@ function App() {
     [findMemberById, handleOpenPath],
   );
 
-  const handleOpenWorkspaceFileCandidates = useCallback(
+  const handleOpenEmployeeAgentFile = useCallback(
     async (memberId: string) => {
       const member = findMemberById(memberId);
       if (!member) {
         return;
       }
 
-      const candidates = [
-        { filename: "ROLE.md", label: "ROLE.md" },
-        { filename: "agent.md", label: "agent.md" },
-      ];
+      const employeeRoot = member.workspace.replace(/[\\/]+$/, "").split(/[\\/]/).slice(0, -1).join("/");
+      const candidate = `${employeeRoot}/EMPLOYEE_AGENT.md`;
 
-      for (const candidate of candidates) {
-        try {
-          await requestOpenLocalPath(`${member.workspace}/${candidate.filename}`);
-          setWorkspaceMessage(`已打开 ${candidate.label}：${member.workspace}/${candidate.filename}`);
-          return;
-        } catch {
-          // try next candidate
-        }
+      try {
+        await requestOpenLocalPath(candidate);
+        setWorkspaceMessage(`已打开 EMPLOYEE_AGENT.md：${candidate}`);
+      } catch {
+        setWorkspaceError("打开 EMPLOYEE_AGENT.md 失败");
       }
-
-      setWorkspaceError("打开 ROLE.md 失败");
     },
     [findMemberById, requestOpenLocalPath],
   );
 
   const handleOpenRoleFile = useCallback(
     async (memberId: string) => {
-      void handleOpenWorkspaceFileCandidates(memberId);
+      void handleOpenEmployeeAgentFile(memberId);
     },
-    [handleOpenWorkspaceFileCandidates],
+    [handleOpenEmployeeAgentFile],
   );
 
   const handleOpenWorkspaceRulesFile = useCallback(
@@ -2140,22 +2297,12 @@ function App() {
         return;
       }
 
-      const candidates = [
-        { filename: "AGENTS.md", label: "AGENTS.md" },
-        { filename: "workspace_guide.md", label: "workspace_guide.md" },
-      ];
-
-      for (const candidate of candidates) {
-        try {
-          await requestOpenLocalPath(`${member.workspace}/${candidate.filename}`);
-          setWorkspaceMessage(`已打开 ${candidate.label}：${member.workspace}/${candidate.filename}`);
-          return;
-        } catch {
-          // try next candidate
-        }
+      try {
+        await requestOpenLocalPath(`${member.workspace}/AGENTS.md`);
+        setWorkspaceMessage(`已打开 AGENTS.md：${member.workspace}/AGENTS.md`);
+      } catch {
+        setWorkspaceError("打开 AGENTS.md 失败");
       }
-
-      setWorkspaceError("打开 AGENTS.md 失败");
     },
     [findMemberById, requestOpenLocalPath],
   );
@@ -2280,12 +2427,14 @@ function App() {
         }
 
         await refreshPendingPrompts();
+        await refreshWorkspaceNodes({ silent: true });
+        setDetailHistoryRefreshToken((current) => current + 1);
         setWorkspaceMessage("审核消息已处理");
       } catch (error) {
         setWorkspaceError(error instanceof Error ? error.message : "处理审核消息失败");
       }
     },
-    [refreshPendingPrompts],
+    [refreshPendingPrompts, refreshWorkspaceNodes],
   );
 
   const handleAddPromptRule = useCallback(() => {
@@ -2353,6 +2502,96 @@ function App() {
       setWorkspaceError(error instanceof Error ? error.message : "提示白名单保存失败");
     }
   }, [promptRulesState.rules, settings.projectPath]);
+
+  const handleInspectorSettingsChange = useCallback((next: InspectorSettings) => {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      error: "",
+      settings: next,
+    }));
+  }, []);
+
+  const handleSaveInspectorSettings = useCallback(async () => {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      error: "",
+      saving: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/inspector/save"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          projectRoot: settings.projectPath,
+          settings: inspectorSettingsState.settings,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "观察者配置保存失败");
+      }
+
+      setInspectorSettingsState((current) => ({
+        ...current,
+        filePath: payload.filePath ?? current.filePath,
+        saving: false,
+        settings: payload.settings ?? current.settings,
+        testError: "",
+      }));
+      setWorkspaceMessage("观察者配置已保存");
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        error: error instanceof Error ? error.message : "观察者配置保存失败",
+        saving: false,
+      }));
+      setWorkspaceError(error instanceof Error ? error.message : "观察者配置保存失败");
+    }
+  }, [getBridgeHeaders, inspectorSettingsState.settings, settings.projectPath]);
+
+  const handleTestInspectorSettings = useCallback(async () => {
+    setInspectorSettingsState((current) => ({
+      ...current,
+      testError: "",
+      testLatencyMs: null,
+      testMessage: "",
+      testModels: [],
+      testing: true,
+    }));
+
+    try {
+      const response = await fetch(buildBridgeUrl("/api/settings/inspector/test"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          projectRoot: settings.projectPath,
+          settings: inspectorSettingsState.settings,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "Inspector AI 连通性测试失败");
+      }
+
+      setInspectorSettingsState((current) => ({
+        ...current,
+        testError: "",
+        testLatencyMs: typeof payload.latencyMs === "number" ? payload.latencyMs : null,
+        testMessage: payload.message ?? "Inspector 连接成功",
+        testModels: Array.isArray(payload.models) ? payload.models : [],
+        testing: false,
+      }));
+      setWorkspaceMessage("Inspector AI 连通性测试成功");
+    } catch (error) {
+      setInspectorSettingsState((current) => ({
+        ...current,
+        testError: error instanceof Error ? error.message : "Inspector AI 连通性测试失败",
+        testing: false,
+      }));
+      setWorkspaceError(error instanceof Error ? error.message : "Inspector AI 连通性测试失败");
+    }
+  }, [getBridgeHeaders, inspectorSettingsState.settings, settings.projectPath]);
 
   const handleApiSecurityChange = useCallback((patch: { apiKey?: string; enabled?: boolean }) => {
     setApiSecurity((current) => ({
@@ -2449,6 +2688,7 @@ function App() {
             repoSource: form.repoSource,
             role: form.role,
             shell: form.shell,
+            systemAgentEnabled: form.systemAgentEnabled,
           }),
         });
 
@@ -2832,6 +3072,8 @@ function App() {
         canEnterTerminal={isTerminalAttachable(detailMember)}
         projectSpaces={detailProjects.items}
         projectSpacesLoading={detailProjects.loading}
+        inspectorLoading={detailInspector.loading}
+        inspectorResult={detailInspector.result}
         isRestarting={detailMemberIsRestarting}
         onRestartRuntime={handleRestartRuntime}
         member={detailMember}
@@ -2840,15 +3082,6 @@ function App() {
         onDownloadHistoryFile={handleDownloadHistoryFile}
         onDownloadProjectHistoryBundle={handleDownloadProjectHistoryBundle}
         onOpenRoleFile={handleOpenRoleFile}
-        onOpenPlanFile={(memberId) => {
-          void handleOpenWorkspaceFile(memberId, "plan.md", "plan.md");
-        }}
-        onOpenRestoreSummaryFile={(memberId) => {
-          void handleOpenWorkspaceFile(memberId, "restore_summary.md", "restore_summary.md");
-        }}
-        onOpenStartupAckFile={(memberId) => {
-          void handleOpenWorkspaceFile(memberId, "startup_ack.md", "startup_ack.md");
-        }}
         onOpenTaskRequestFile={(memberId) => {
           void handleOpenWorkspaceFile(memberId, "task_request.md", "task_request.md");
         }}
@@ -2879,8 +3112,9 @@ function App() {
         }}
         onOpenWorkspace={handleOpenWorkspace}
         onSwitchProjectSpace={handleSwitchProjectSpace}
-        onRetryStartupAck={handleRetryStartupAck}
         onDeleteEmployee={handleDeleteEmployee}
+        onRunInspector={handleRunInspector}
+        onSendInspectorReply={handleSendInspectorReply}
         onStopRuntime={handleStopRuntime}
         onUpdateMemberSettings={handleUpdateMemberSettings}
       />
@@ -2989,6 +3223,7 @@ function App() {
       <SettingsModal
         apiSecurityState={apiSecurity}
         codexSettingsState={codexSettingsState}
+        inspectorSettingsState={inspectorSettingsState}
         onApiSecurityChange={handleApiSecurityChange}
         onAddPromptRule={handleAddPromptRule}
         onCodexAuthChange={handleCodexAuthChange}
@@ -2997,12 +3232,15 @@ function App() {
         onClose={() => setSettingsOpen(false)}
         onDeletePromptRule={handleDeletePromptRule}
         onGenerateApiKey={handleGenerateApiKey}
+        onInspectorSettingsChange={handleInspectorSettingsChange}
         onPromptRuleChange={handlePromptRuleChange}
         onSave={setSettings}
         onSaveApiSecurity={handleSaveApiSecurity}
         onSaveCodexSettings={handleSaveCodexSettings}
+        onSaveInspectorSettings={handleSaveInspectorSettings}
         onSavePromptRules={handleSavePromptRules}
         onTestCodexSettings={handleTestCodexSettings}
+        onTestInspectorSettings={handleTestInspectorSettings}
         onSyncRepo={() => void syncAgentRepo(true)}
         open={settingsOpen}
         promptRulesState={promptRulesState}
