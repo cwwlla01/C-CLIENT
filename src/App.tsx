@@ -1962,27 +1962,26 @@ function App() {
           const normalizedQueue = current.taskQueue.filter(
             (line) => !line.startsWith("项目 "),
           );
+          const isImmediate =
+            payload.mode === "current" ||
+            payload.mode === "project_switch" ||
+            (payload.mode === "queued_project" && member.runtimeStatus === "running");
 
           return {
             ...current,
-            currentTask:
-              payload.mode === "current" || payload.mode === "project_switch"
-                ? taskSummary
-                : current.currentTask,
+            currentTask: isImmediate ? taskSummary : current.currentTask,
             diagnostics: [
               `收到任务：${taskSummary} [${priority}]`,
               ...current.diagnostics.filter((line) => !line.startsWith("收到任务：")),
             ],
             nextAction:
-              payload.mode === "current" || payload.mode === "project_switch"
-                ? "先确认任务并生成计划"
-                : "当前任务完成后处理新任务",
+              isImmediate ? "执行中" : "当前任务完成后处理新任务",
             projectName:
               payload.mode === "project_switch" && payload.projectName
                 ? payload.projectName
                 : current.projectName,
             taskDeadline: payload.deadlineAt || null,
-            taskIntakeStatus: "pending_ack",
+            taskIntakeStatus: "none",
             taskPriority: priority,
             taskSource: source,
             taskTimeWindow: timeWindow,
@@ -1991,7 +1990,7 @@ function App() {
                 ? [...normalizedQueue, taskSummary]
                 : normalizedQueue,
             workStatus:
-              payload.mode === "current" || payload.mode === "project_switch"
+              isImmediate
                 ? "busy"
                 : current.workStatus,
             workspace:
@@ -2011,8 +2010,11 @@ function App() {
             launchPayload?.launchMode === "codex"
               ? "并已切换到目标项目启动 Codex 员工"
               : "并已切换到目标项目启动 CLI";
-        } else if (member.runtimeStatus !== "running") {
-          const launchPayload = await handleStartRuntime(memberId);
+        } else if (payload.mode === "current") {
+          const launchPayload = await handleStartRuntime(
+            memberId,
+            payload.workspacePath || member.workspace,
+          );
           launchMessage =
             launchPayload.launchMode === "codex"
               ? "并已自动启动 Codex 员工"
@@ -2021,6 +2023,7 @@ function App() {
 
         setPublishTaskOpen(false);
         setHasPublishedOnboardingTask(true);
+        await refreshWorkspaceNodes({ silent: true });
         setWorkspaceMessage(
           payload.mode === "queued_project"
             ? `任务已写入 ${projectName}，等待 ${member.name} 完成当前项目后切换`
@@ -2030,7 +2033,7 @@ function App() {
         setWorkspaceError(error instanceof Error ? error.message : "发布任务失败");
       }
     },
-    [findMemberById, handleRestartRuntime, handleStartRuntime, updateMember],
+    [findMemberById, handleRestartRuntime, handleStartRuntime, refreshWorkspaceNodes, updateMember],
   );
 
   const handleCompleteTask = useCallback(
@@ -3165,6 +3168,7 @@ function App() {
         <TerminalWindow
           apiKey={apiSecurity.apiKey}
           apiKeyEnabled={apiSecurity.enabled}
+          bridgeHttpOrigin={BRIDGE_HTTP_ORIGIN}
           bridgeWsOrigin={BRIDGE_WS_ORIGIN}
           configuredModel={codexSettingsState.config.model}
           configuredReasoning={codexSettingsState.config.modelReasoningEffort}

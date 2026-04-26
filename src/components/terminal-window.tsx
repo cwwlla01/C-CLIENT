@@ -8,6 +8,7 @@ import type { RuntimeMember } from "../data/mock-runtime";
 type TerminalWindowProps = {
   apiKey?: string;
   apiKeyEnabled?: boolean;
+  bridgeHttpOrigin?: string;
   bridgeWsOrigin?: string;
   configuredModel?: string;
   configuredReasoning?: string;
@@ -32,6 +33,7 @@ const stateToneMap: Record<BridgeConnectionState, string> = {
 export function TerminalWindow({
   apiKey = "",
   apiKeyEnabled = false,
+  bridgeHttpOrigin = "http://127.0.0.1:4281",
   bridgeWsOrigin = "ws://127.0.0.1:4281",
   configuredModel = "",
   configuredReasoning = "",
@@ -47,6 +49,7 @@ export function TerminalWindow({
   const [hasUnreadOutput, setHasUnreadOutput] = useState(false);
   const [suppressedNoiseCount, setSuppressedNoiseCount] = useState(0);
   const [lastSuppressedNoise, setLastSuppressedNoise] = useState("");
+  const [liveCodexSessionId, setLiveCodexSessionId] = useState("");
 
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -127,6 +130,59 @@ export function TerminalWindow({
     );
     return true;
   };
+
+  useEffect(() => {
+    setLiveCodexSessionId(member?.runtimeInfo?.codexSessionId ?? "");
+  }, [member?.id, member?.runtimeInfo?.codexSessionId]);
+
+  useEffect(() => {
+    if (!member?.workspace) {
+      return;
+    }
+
+    let cancelled = false;
+    const normalizedOrigin = bridgeHttpOrigin.replace(/\/+$/, "");
+
+    const loadStatus = async () => {
+      try {
+        const response = await fetch(`${normalizedOrigin}/api/employee/status`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...(apiKeyEnabled && apiKey.trim() ? { "X-CClient-Key": apiKey.trim() } : {}),
+          },
+          body: JSON.stringify({
+            workspacePath: member.workspace,
+          }),
+        });
+        const payload = await response.json();
+        if (!response.ok) {
+          return;
+        }
+        if (!cancelled) {
+          const nextCodexSessionId =
+            payload?.status?.codexSessionId ||
+            payload?.status?.inspector?.codexSessionId ||
+            "";
+          if (typeof nextCodexSessionId === "string") {
+            setLiveCodexSessionId(nextCodexSessionId);
+          }
+        }
+      } catch {
+        // ignore terminal metadata refresh errors
+      }
+    };
+
+    void loadStatus();
+    const timer = window.setInterval(() => {
+      void loadStatus();
+    }, 3000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [apiKey, apiKeyEnabled, bridgeHttpOrigin, member?.workspace]);
 
   useEffect(() => {
     if (!member || !containerRef.current) {
@@ -476,7 +532,7 @@ export function TerminalWindow({
               </div>
               <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">Codex 会话</p>
-                <p className="mt-2 break-all text-sm text-neutral-content">{member.runtimeInfo?.codexSessionId || "待发现"}</p>
+                <p className="mt-2 break-all text-sm text-neutral-content">{liveCodexSessionId || "待发现"}</p>
               </div>
               <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">配置模型</p>

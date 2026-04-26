@@ -2224,6 +2224,7 @@ async function getEmployeeStatus(workspacePath) {
   const inspector = await ensureInspectorResult(context.currentWorkspace, context.liveSession);
   return {
     status: {
+      codexSessionId: context.liveSession?.codexSessionId ?? context.currentMeta.codexSessionId ?? "",
       currentProject: context.currentProjectName,
       currentTask: context.currentTaskState.currentTask,
       inspector,
