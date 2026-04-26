@@ -46,6 +46,10 @@
 - 支持可选开启的本地 API Key 鉴权
 - 覆盖本地 REST 接口与 `/terminal` WebSocket
 - 配置保存到 `{项目路径}/setting/security.json`
+- 支持可选开启的 UI 登录保护
+- UI 登录保护开启后，前端启动会先要求输入密码
+- 登录成功后会发放当前浏览器会话的 UI token
+- 受保护的本地 REST / WebSocket 请求也会校验 UI token
 
 ## 当前 Codex 能力
 

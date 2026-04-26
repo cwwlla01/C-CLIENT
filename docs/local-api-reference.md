@@ -16,6 +16,56 @@
 
 ## 2. 工作空间接口
 
+## 安全与登录保护
+
+### `POST /api/settings/security/load`
+
+返回：
+
+- `enabled`
+- `filePath`
+- `uiLockEnabled`
+- `uiPasswordSet`
+
+### `POST /api/settings/security/save`
+
+支持保存：
+
+- 本地 API Key 鉴权
+- UI 登录保护开关
+- UI 登录密码（后端只保存哈希）
+
+### `POST /api/settings/security/verify-ui-lock`
+
+作用：
+
+- 验证 UI 登录密码
+- 成功后返回当前浏览器会话可用的 `uiSessionToken`
+
+请求体：
+
+```json
+{
+  "projectRoot": "D:/PROJECT/COMPANY",
+  "password": "your-password"
+}
+```
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "uiLockEnabled": true,
+  "uiSessionToken": "xxxxxxxxxxxxxxxx"
+}
+```
+
+说明：
+
+- 前端后续请求会通过 `X-CClient-Ui-Token` 头自动带上该 token
+- UI 登录保护开启时，受保护 API 会校验该 token
+
 ### `POST /api/workspace/init`
 
 作用：
