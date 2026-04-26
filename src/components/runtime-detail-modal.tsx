@@ -459,7 +459,7 @@ export function RuntimeDetailModal({
               onClick={() => setActiveTab("history")}
               type="button"
             >
-              工作成果
+              交付与变更
             </button>
             <button
               className={`tab ${activeTab === "projects" ? "tab-active" : ""}`}
@@ -967,9 +967,9 @@ export function RuntimeDetailModal({
           {activeTab === "history" ? (
             <div className="space-y-4">
               <section className="card bg-base-200 p-4 shadow-none">
-                <p className="text-xs uppercase tracking-[0.18em] text-shell-muted">工作成果</p>
+                <p className="text-xs uppercase tracking-[0.18em] text-shell-muted">交付与变更</p>
                 <p className="mt-2 text-xs text-shell-muted">
-                  展示当前员工在不同项目下的聚合成果，文件仍保留在各自项目工作空间中。
+                  展示当前员工在不同项目下已归档的交付文件与变更记录，文件仍保留在各自项目工作空间中。
                 </p>
                 <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -1012,11 +1012,11 @@ export function RuntimeDetailModal({
                 </div>
                 {historyLoading ? (
                   <div className="mt-3 space-y-2 text-sm text-shell-muted">
-                    <p>正在加载工作成果...</p>
+                    <p>正在加载交付与变更...</p>
                   </div>
                 ) : filteredGroupedHistory.length === 0 ? (
                   <div className="mt-3 card bg-base-100 px-3 py-3 text-sm text-shell-muted shadow-none">
-                    暂无工作成果
+                    暂无交付与变更
                   </div>
                 ) : (
                   <div className="mt-3 space-y-4">
@@ -1026,7 +1026,7 @@ export function RuntimeDetailModal({
                           <div className="flex items-center gap-2">
                             <span className="badge badge-outline rounded-md">{group.projectName}</span>
                             <span className="text-xs text-shell-muted">
-                              {group.entries.length} 项成果
+                              {group.entries.length} 项记录
                             </span>
                           </div>
                           {group.workspacePath ? (
@@ -1037,7 +1037,7 @@ export function RuntimeDetailModal({
                               }
                               type="button"
                             >
-                              下载项目成果
+                              下载项目记录
                             </button>
                           ) : null}
                         </div>

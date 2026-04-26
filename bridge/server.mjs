@@ -534,6 +534,12 @@ function extractTargetFileCandidates(taskText) {
     if (/^(http|https):/i.test(candidate)) {
       continue;
     }
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}[:\-]\d{2}[:\-]\d{2}/i.test(candidate)) {
+      continue;
+    }
+    if (/^\d[\d:T.\-Z]+$/i.test(candidate)) {
+      continue;
+    }
     matches.add(candidate);
   }
 
@@ -2658,6 +2664,34 @@ async function assignTaskWithinWorkspace(payload) {
     taskStatus: assignMode === "current" ? "assigned" : "queued",
   });
 
+  const liveSession =
+    payload.memberId && sessions.has(payload.memberId)
+      ? sessions.get(payload.memberId)
+      : null;
+  const launchPrompt = buildRawTaskLaunchPrompt(taskDescription, savedReferences);
+  if (
+    assignMode === "current" &&
+    liveSession &&
+    String(liveSession.cwd || "").replace(/\\/g, "/").toLowerCase() ===
+      workspacePath.replace(/\\/g, "/").toLowerCase() &&
+    launchPrompt
+  ) {
+    liveSession.pty.write(`${launchPrompt}\r`);
+    await mergeJsonFile(runtimeMetaPath, {
+      lastActiveAt: new Date().toISOString(),
+      pendingLaunchPrompt: null,
+      taskStatus: "working",
+      workStatus: "busy",
+    });
+    await upsertProjectIndexEntry(employeeRoot, workspacePath, {
+      lastActiveAt: new Date().toISOString(),
+      lastOpenedAt: new Date().toISOString(),
+      lastTaskSummary: taskSummary,
+      projectName: deriveProjectNameFromWorkspace(workspacePath),
+      taskStatus: "working",
+    });
+  }
+
   return {
     assigned: true,
     assignedAt,
@@ -4717,6 +4751,27 @@ async function ensureSession({
   const existing = sessions.get(memberId);
   if (existing) {
     existing.lastActiveAt = Date.now();
+    const normalizedCwd = String(cwd || existing.cwd || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+    const existingCwd = String(existing.cwd || "").replace(/[\\/]+$/, "").replace(/\\/g, "/").toLowerCase();
+    if (normalizedCwd && normalizedCwd === existingCwd) {
+      const runtimeMetaPath = path.join(existing.cwd, "runtime", "meta.json");
+      const currentMeta = await readJsonFile(runtimeMetaPath, {});
+      const pendingLaunchPrompt = String(currentMeta?.pendingLaunchPrompt || "").trim();
+      if (pendingLaunchPrompt) {
+        existing.pty.write(`${pendingLaunchPrompt}\r`);
+        await mergeJsonFile(runtimeMetaPath, {
+          lastActiveAt: new Date().toISOString(),
+          pendingLaunchPrompt: null,
+          taskStatus: "working",
+          workStatus: "busy",
+        });
+        await upsertProjectIndexEntry(deriveEmployeeRootFromWorkspace(existing.cwd), existing.cwd, {
+          lastActiveAt: new Date().toISOString(),
+          lastOpenedAt: new Date().toISOString(),
+          taskStatus: "working",
+        });
+      }
+    }
     return { session: existing, reused: true };
   }
 

@@ -476,7 +476,7 @@ export function TerminalWindow({
               </div>
               <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">Codex 会话</p>
-                <p className="mt-2 break-all text-sm text-neutral-content">{member.runtimeInfo?.codexSessionId || "-"}</p>
+                <p className="mt-2 break-all text-sm text-neutral-content">{member.runtimeInfo?.codexSessionId || "待发现"}</p>
               </div>
               <div className="rounded-box border border-neutral-content/10 bg-[#0B1220] px-4 py-3">
                 <p className="text-[11px] uppercase tracking-[0.16em] text-neutral-content/50">配置模型</p>
