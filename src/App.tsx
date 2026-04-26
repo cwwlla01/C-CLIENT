@@ -1556,6 +1556,41 @@ function App() {
     [setNodes],
   );
 
+  const refreshMemberRuntimeState = useCallback(
+    async (memberId: string, workspacePath: string) => {
+      const response = await fetch(buildBridgeUrl("/api/workspace/discover"), {
+        method: "POST",
+        headers: getBridgeHeaders(),
+        body: JSON.stringify({
+          projectRoot: settings.projectPath,
+        }),
+      });
+      const payload = await response.json();
+      if (!response.ok) {
+        throw new Error(payload.error || "员工状态刷新失败");
+      }
+
+      const runtimes = Array.isArray(payload.runtimes) ? (payload.runtimes as DiscoveredRuntime[]) : [];
+      const matched = runtimes.find((runtime) => {
+        const runtimeMemberId = String(runtime.memberId || "").trim();
+        const runtimeWorkspace = String(runtime.workspacePath || "").replace(/[\\/]+$/, "");
+        return runtimeMemberId === memberId || normalizePathKey(runtimeWorkspace) === normalizePathKey(workspacePath);
+      });
+
+      if (!matched) {
+        return null;
+      }
+
+      const refreshed = memberFromDiscoveredRuntime(matched);
+      updateMember(memberId, (current) => ({
+        ...current,
+        ...refreshed,
+      }));
+      return refreshed;
+    },
+    [getBridgeHeaders, settings.projectPath, updateMember],
+  );
+
   const visibleNodes = useMemo(
     () => {
       const companyScopedNodes =
@@ -2024,6 +2059,10 @@ function App() {
         setPublishTaskOpen(false);
         setHasPublishedOnboardingTask(true);
         await refreshWorkspaceNodes({ silent: true });
+        await refreshMemberRuntimeState(
+          memberId,
+          payload.switchWorkspacePath || payload.workspacePath || member.workspace,
+        );
         setWorkspaceMessage(
           payload.mode === "queued_project"
             ? `任务已写入 ${projectName}，等待 ${member.name} 完成当前项目后切换`
@@ -2033,7 +2072,7 @@ function App() {
         setWorkspaceError(error instanceof Error ? error.message : "发布任务失败");
       }
     },
-    [findMemberById, handleRestartRuntime, handleStartRuntime, refreshWorkspaceNodes, updateMember],
+    [findMemberById, handleRestartRuntime, handleStartRuntime, refreshMemberRuntimeState, refreshWorkspaceNodes, updateMember],
   );
 
   const handleCompleteTask = useCallback(

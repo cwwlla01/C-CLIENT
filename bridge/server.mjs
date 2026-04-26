@@ -2222,9 +2222,11 @@ async function getEmployeeInfo(workspacePath) {
 async function getEmployeeStatus(workspacePath) {
   const context = await resolveEmployeeContext(workspacePath);
   const inspector = await ensureInspectorResult(context.currentWorkspace, context.liveSession);
+  const liveCodexSessionId = String(context.liveSession?.codexSessionId || "").trim();
+  const metaCodexSessionId = String(context.currentMeta.codexSessionId || "").trim();
   return {
     status: {
-      codexSessionId: context.liveSession?.codexSessionId ?? context.currentMeta.codexSessionId ?? "",
+      codexSessionId: liveCodexSessionId || metaCodexSessionId || "",
       currentProject: context.currentProjectName,
       currentTask: context.currentTaskState.currentTask,
       inspector,
