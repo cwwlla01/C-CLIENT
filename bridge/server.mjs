@@ -233,8 +233,6 @@ function defaultInspectorSettings() {
       "choice_ab",
       "choice_numeric",
       "confirm_yes_no",
-      "continue_prompt",
-      "trust_prompt",
     ],
     autoReplyEnabled: true,
     autopilotMode: "suggest_only",
@@ -516,6 +514,10 @@ function detectPromptReturned(outputText) {
   return /(^|\n)\s*[›>]\s/m.test(normalized);
 }
 
+function isObserverDecisionType(type) {
+  return ["choice_ab", "choice_numeric", "confirm_yes_no"].includes(String(type || ""));
+}
+
 function extractTargetFileCandidates(taskText) {
   const normalized = String(taskText || "");
   const matches = new Set();
@@ -676,7 +678,13 @@ async function buildInspectorResult(workspacePath, session = null) {
   );
   const missingTargetFiles = targetFiles.filter((target) => !matchedTargetFiles.includes(target));
   const lastAutoReplyAt = String(meta.inspectorLastAutoReplyAt || "").trim() || null;
-  const replyCandidate = detectReplyCandidate(outputSnapshot, settings.preferences);
+  let replyCandidate = detectReplyCandidate(outputSnapshot, settings.preferences);
+
+  // `Press enter to continue` 和目录信任这类固定提示已经由运行时提示自动化处理，
+  // 观察者不再重复介入，避免出现反复建议/回车的体验问题。
+  if (replyCandidate?.type === "continue_prompt" || replyCandidate?.type === "trust_prompt") {
+    replyCandidate = null;
+  }
 
   let completionScore = 0;
   let blockedScore = 0;
@@ -761,11 +769,15 @@ async function buildInspectorResult(workspacePath, session = null) {
   let autoPilotDecision = "none";
   let decisionSource = "rules";
   if (replyCandidate) {
-    suggestions.push(replyCandidate.summary);
+    if (isObserverDecisionType(replyCandidate.type)) {
+      suggestions.push(replyCandidate.summary);
+    }
     if (replyCandidate.riskLevel === "high") {
       risks.push("检测到高风险确认提示，禁止自动驾驶直接处理。");
     }
-    if (settings.autopilotMode === "suggest_only") {
+    if (!isObserverDecisionType(replyCandidate.type)) {
+      autoPilotDecision = "none";
+    } else if (settings.autopilotMode === "suggest_only") {
       autoPilotDecision = "suggested";
     } else if (
       settings.autoReplyEnabled &&
@@ -795,7 +807,7 @@ async function buildInspectorResult(workspacePath, session = null) {
       (settings.inspectionMode === "hybrid" &&
         (verdict === "insufficient" || (missingTargetFiles.length === 0 && completionScore < settings.thresholds.completionScore))));
 
-  if (shouldUseAi) {
+    if (shouldUseAi) {
     try {
       const aiResult = await callInspectorAiReview(settings, {
         artifacts: artifacts.map((item) => item.title),

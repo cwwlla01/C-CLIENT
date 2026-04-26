@@ -45,8 +45,6 @@ export function createDefaultInspectorSettings(): InspectorSettings {
       "choice_ab",
       "choice_numeric",
       "confirm_yes_no",
-      "continue_prompt",
-      "trust_prompt",
     ],
     autoReplyEnabled: true,
     autopilotMode: "suggest_only",
