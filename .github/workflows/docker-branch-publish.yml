@@ -57,3 +57,66 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  deploy:
+    needs: docker
+    if: github.ref == 'refs/heads/feature/inspector-runtime-mvp'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute branch image tag
+        id: branch_tag
+        shell: bash
+        run: |
+          SAFE_BRANCH="${GITHUB_REF_NAME//\//-}"
+          echo "value=${SAFE_BRANCH}" >> "$GITHUB_OUTPUT"
+
+      - name: Install sshpass
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+
+      - name: Upload deploy compose file
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        shell: bash
+        run: |
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" "mkdir -p '$DEPLOY_PATH'"
+          sshpass -p "$SSH_PASSWORD" scp -o StrictHostKeyChecking=no -P "$SSH_PORT" ./deploy/docker-compose.server.yml "$SSH_USER@$SSH_HOST:$DEPLOY_PATH/docker-compose.yml"
+
+      - name: Deploy on server
+        env:
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          IMAGE_TAG: ${{ steps.branch_tag.outputs.value }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PASSWORD: ${{ secrets.SSH_PASSWORD }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+        shell: bash
+        run: |
+          REMOTE_SCRIPT=$(cat <<'EOF'
+          set -e
+          mkdir -p "$DEPLOY_PATH/runtime-data/company" "$DEPLOY_PATH/runtime-data/settings" "$DEPLOY_PATH/runtime-data/codex-home"
+          cat > "$DEPLOY_PATH/.env" <<ENVEOF
+          IMAGE_TAG=$IMAGE_TAG
+          ENVEOF
+          echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USERNAME" --password-stdin
+          cd "$DEPLOY_PATH"
+          docker compose pull
+          docker compose up -d
+          docker image prune -f
+          EOF
+          )
+          sshpass -p "$SSH_PASSWORD" ssh -o StrictHostKeyChecking=no -p "$SSH_PORT" "$SSH_USER@$SSH_HOST" \
+            "export DEPLOY_PATH='$DEPLOY_PATH' IMAGE_TAG='$IMAGE_TAG' DOCKERHUB_USERNAME='$DOCKERHUB_USERNAME' DOCKERHUB_TOKEN='$DOCKERHUB_TOKEN'; bash -s" <<< "$REMOTE_SCRIPT"

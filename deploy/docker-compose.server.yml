@@ -1,0 +1,17 @@
+services:
+  c-client:
+    image: cwwlla01/c-client:${IMAGE_TAG}
+    container_name: c-client
+    environment:
+      CCLIENT_BRIDGE_HOST: 0.0.0.0
+      CCLIENT_BRIDGE_PORT: 4281
+      CCLIENT_PUBLIC_DEFAULT_PROJECT_PATH: /workspace/company
+      UI_PORT: 4273
+    ports:
+      - "4273:4273"
+      - "4281:4281"
+    volumes:
+      - ./runtime-data/company:/workspace/company
+      - ./runtime-data/settings:/workspace/settings
+      - ./runtime-data/codex-home:/root/.codex
+    restart: unless-stopped
