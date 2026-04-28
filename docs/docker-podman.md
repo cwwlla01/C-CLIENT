@@ -397,3 +397,81 @@ podman compose up --build
 2. 宿主机文件打开代理
 3. API Key 与 Codex 登录态文档化
 4. 多容器 worker 模式
+
+## 10. GitHub Actions 自动部署
+
+当前仓库已新增：
+
+```text
+.github/workflows/docker-branch-publish.yml
+```
+
+能力：
+
+- push 分支时自动构建镜像
+- 推送到 Docker Hub
+- 为镜像打分支名 tag / sha tag
+- 当分支为 `feature/inspector-runtime-mvp` 时自动部署到服务器
+
+### 当前部署镜像
+
+- `cwwlla01/c-client:<branch-tag>`
+
+例如本分支会生成：
+
+- `cwwlla01/c-client:feature-inspector-runtime-mvp`
+
+### 服务器部署目录
+
+当前 workflow 会把部署文件下发到：
+
+```text
+/opt/1panel/docker/compose/c-client
+```
+
+并在该目录执行：
+
+- `docker compose pull`
+- `docker compose up -d`
+
+### 服务器 compose 文件
+
+仓库内新增：
+
+```text
+deploy/docker-compose.server.yml
+```
+
+服务器会把它复制为：
+
+```text
+/opt/1panel/docker/compose/c-client/docker-compose.yml
+```
+
+### 需要的 GitHub Secrets
+
+当前仓库已使用这些 secrets：
+
+- `DOCKERHUB_USERNAME`
+- `DOCKERHUB_TOKEN`
+- `SSH_HOST`
+- `SSH_USER`
+- `SSH_PORT`
+- `SSH_PASSWORD`
+- `DEPLOY_PATH`
+
+### 登录方式
+
+当前自动部署使用：
+
+- **SSH 密码登录**
+
+不是私钥登录。
+
+### 服务器端运行结果
+
+根据最近一次 GitHub Actions 日志，服务器端已成功完成：
+
+- 镜像拉取
+- `docker compose up -d`
+- 容器 `c-client` 创建并启动
